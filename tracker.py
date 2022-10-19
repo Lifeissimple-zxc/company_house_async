@@ -3,8 +3,8 @@ import os
 import pandas as pd
 import json
 from leadManager import LeadManager
-from utils import createSearchDates, createParams, getDaysDelta
-from connector import makeRequests
+from utils import createSearchDates, createParams, getDaysDelta, performTasks
+from connector import Connector
 from dotenv import load_dotenv
 from aiohttp import BasicAuth
 from sys import platform
@@ -26,7 +26,9 @@ sheetSecrets = json.loads(GSHEET_SECRET)
 benchmarkSheets = BENCHMARK_SHEETNAMES.split(",")
 #Test params
 TEST_PARAMS = {'headers': {'company_status': 'active,open', 'sic_codes': '56101,56102,56103'}, 'days_back': 30}
-
+#Preapre to run async programm - move to a separate function?
+if "win" in str(platform).lower():
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
 #Init lead manager
 manager = LeadManager()
 
@@ -54,28 +56,28 @@ if countLeadsSheet > 0:
     del maxLeadCreatedStr, maxLeadCreatedDate
 #filter dates for leads, then use getDaysDelta() to compute days_back
 searchDates = createSearchDates(searchParams["days_back"])
-paramList = []
-for day in searchDates:
-    tmp = createParams(headerBase = searchParams["headers"], day = day)
-    tmp_copy = tmp.copy()
-    paramList.append(tmp_copy)
-    del tmp, tmp_copy
-urlList =  [SEARCH_URL] * len(paramList)
-
-#Run async programm
-if "win" in str(platform).lower():
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
-
-asyncio.run(
-    makeRequests(
-        urlList = urlList,
-        paramList = paramList,
-        rate = RATE,
-        limit = LIMIT,
-        auth = BasicAuth(REST_KEY, ""),
-        storage = manager.searchStorage
-    )
+#init connector
+connector = Connector(
+    rate = RATE,
+    limit = asyncio.Semaphore(LIMIT)
 )
+#Generate Tasks for asyncio
+tasks = []
+for day in searchDates:
+    params = createParams(headerBase = searchParams["headers"], day = day)
+    paramsCopy = params.copy()
+    tasks.append(
+        connector.makeRequest(
+        url = SEARCH_URL,
+        auth = BasicAuth(REST_KEY, ""),
+        params = paramsCopy,
+        storage = manager.searchStorage
+        )
+    )
+
+loop = asyncio.get_event_loop()
+loop.run_until_complete(performTasks(tasks))
+loop.close()
 #Storage of the companies needs to be rewritten :()
 print("Done with ASYNC")
 print("########################################################################################")   
