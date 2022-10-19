@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta, date
 
 def getDaysDelta(lastLeadDate: date):
@@ -12,3 +13,6 @@ def createParams(headerBase: dict, day: date):
         output["incorporated_from"] = str(day)
         output["incorporated_to"] = str(day)
         return output
+
+async def performTasks(taskList) -> None:
+    await asyncio.gather(*taskList)
