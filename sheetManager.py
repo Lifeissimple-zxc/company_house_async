@@ -9,11 +9,12 @@ from janitor import clean_names
 from attr import define
 from logging import Logger
 from customLogger import customLogger
+from typing import Union
 
 class sheetManager:
     def __init__(
         self,
-        logger: customLogger, #TO-DO: can we use a simple logger here?
+        logger: Logger, #TO-DO: can we use a simple logger here?
         benchmarkSheets: list,
         controlPanelSheetName: str,
         leadsSheetName: str,
@@ -37,7 +38,7 @@ class sheetManager:
             client = pygsheets.authorize(service_account_env_var = self.sheetSecretVarName)
             self.client = client
         except Exception as e:
-            self.logger.logger.error(f"Api connection error: {e}")
+            self.logger.error(f"Api connection error: {e}")
             
 
     
@@ -48,7 +49,7 @@ class sheetManager:
         try:
             self.spreadsheet = self.client.open_by_key(sheetId)
         except Exception as e:
-            self.logger.logger.error(f"Failed to open sheet with id {sheetId}: {e}")
+            self.logger.error(f"Failed to open sheet with id {sheetId}: {e}")
             #TO-DO: send notification
 
     
@@ -60,19 +61,19 @@ class sheetManager:
             sheetTitles = [ws.title for ws in self.spreadsheet.worksheets()]
             for sheet in self.benchmarkSheets:
                 if sheet not in sheetTitles:
-                    self.logger.logger.warning(f"{sheet} is missing in {self.sheetId} document, reconfig needed!")
+                    self.logger.warning(f"{sheet} is missing in {self.sheetId} document, reconfig needed!")
                     exit()
         except Exception as e:
-            self.logger.logger.error(f"Sheet validation error: {e}")
+            self.logger.error(f"Sheet validation error: {e}")
 
     def readControlPanel(self):
         try:
             self.panelSheet = self.spreadsheet.worksheet_by_title(self.controlPanelSheetName)
             self.controlPanelFrame = pd.DataFrame(self.panelSheet.get_as_df()).clean_names()
         except Exception as e:
-            self.logger.logger.error(f"Control panel reading error: {e}")
+            self.logger.error(f"Control panel reading error: {e}")
     
-    def parseSearchParams(self):
+    def parseSearchParams(self) -> Union[dict, None]:
         try:
             searchConfig = {"headers": {}}
             searchFrame = self.controlPanelFrame.query("purpose == 'search' and actual_input != ''")
@@ -91,18 +92,17 @@ class sheetManager:
                 else:
                     searchConfig[key] = input
 
-            return searchConfig, None
+            return searchConfig
         except Exception as e:
-            self.logger.logger.error(f"Search params parsing error: {e}")
-            return None, e
+            self.logger.error(f"Search params parsing error: {e}")
+            return None
 
     def readLeadsTable(self):
         try:
             self.leadSheet = self.spreadsheet.worksheet_by_title(self.leadsSheetName)
-            self.sheetLeadsFrame = pd.DataFrame(self.leadSheet.get_as_df()).clean_names()
-            return len(self.sheetLeadsFrame), None
+            self.leadFrame = pd.DataFrame(self.leadSheet.get_as_df()).clean_names()
+            return None
         except Exception as e:
-            self.logger.logger.error(f"Reading leads table error: {e}")
-            return None, e
-        
+            self.logger.error(f"Reading leads table error: {e}")
+            return e
 
