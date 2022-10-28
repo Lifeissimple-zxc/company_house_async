@@ -1,0 +1,9 @@
+leadSheetColumns:
+    companyName: "company_name"
+    companyNumber: "company_number"
+    address: "address_string"
+    dateCreated: "date_of_creation"
+    companyType: "company_type"
+    sicCodes: "sic_codes_string"
+    runTs: "run_added_ts"
+    officerNames: "company_officer_names"
