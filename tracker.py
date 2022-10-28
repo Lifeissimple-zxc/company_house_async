@@ -7,7 +7,7 @@ import logging
 import sys
 from pytz import timezone
 from leadManager import LeadManager
-from utils import createSearchDates, createParams, getDaysDelta, softDirCreate
+from utils import utilMaster
 from asyncUtils import performTasks
 from connector import Connector
 from dotenv import load_dotenv
@@ -21,7 +21,8 @@ from constants import (
     LOG_FORMAT,
     LOG_FILE_NAME,
     LOG_FOLDER,
-    TIMEZONE
+    TIMEZONE,
+    SHEET_SCHEMA_PATH
 )
 from logging import handlers
 from customLogger import customLogger
@@ -35,8 +36,10 @@ GSHEET_ID = os.environ.get("GSHEET_ID")
 BENCHMARK_SHEETNAMES = os.getenv("BENCHMARK_SHEETNAMES").split(",")
 GSHEET_CONTROL_PANEL_NAME = os.getenv("GSHEET_CONTROL_PANEL_NAME")
 GSHEET_LEAD_TABLE_NAME = os.getenv("GSHEET_LEAD_TABLE_NAME")
+#Instantiate utils class
+utils = utilMaster()
 #Create logger dir, TO-DO: check if error can be handled here
-softDirCreate(LOG_FOLDER)
+utils.softDirCreate(LOG_FOLDER)
 #Configure logger
 logging.basicConfig(
     level = logging.INFO,
@@ -53,53 +56,59 @@ logging.basicConfig(
 #Set logger timezone
 logging.Formatter.converter = lambda *args: dt.now(tz=timezone(TIMEZONE)).timetuple()
 #Perform logger assignment
-recordKeeper = customLogger(logging.getLogger())
-recordKeeper.logger.info("Logger instantiated")
+utils.assignLogger(logging.getLogger("mainLogger"))
+utils.logger.info("Instantiated logger and assigned it to utils instance")
+#Read YAML
+YAML_CONTENTS = utils.readYaml(SHEET_SCHEMA_PATH)
+if YAML_CONTENTS is None:
+    pass #TO-DO smth here if yaml is not read
+LEAD_SHEET_SCHEMA = YAML_CONTENTS["leadSheetColumns"]
+
 #Test params - remove?
 #  TEST_PARAMS = {'headers': {'company_status': 'active,open', 'sic_codes': '56101,56102,56103'}, 'days_back': 30}
-#Preapre to run async programm - move to a separate function?
+#Prepare to run async steps
 if "win" in str(sys.platform).lower():
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
-    recordKeeper.logger.info("Event policy set, this is a windows-specific step!")
+    utils.logger.info("Event policy set, this is a windows-specific step!")
 
 #Init lead manager
 manager = LeadManager()
-recordKeeper.logger.info("Sheet Manager Instantiated")
+utils.logger.info("Lead Manager Instantiated")
+
 #Read Spreadsheet Data
 sheetReader = sheetManager(
-    logger = recordKeeper,
+    logger = utils.logger,
     benchmarkSheets = BENCHMARK_SHEETNAMES,
     controlPanelSheetName = GSHEET_CONTROL_PANEL_NAME,
     leadsSheetName = GSHEET_LEAD_TABLE_NAME
 )
-#TO-DO: Steps here needs to be logged
+utils.logger.info("Sheet Manager Instantiated")
+
 sheetReader.connect()
 sheetReader.openSheet(GSHEET_ID)
 sheetReader.validateSheet()
 sheetReader.readControlPanel()
-countLeadsSheet = sheetReader.readLeadsTable()
+sheetReader.readLeadsTable()
 searchParams = sheetReader.parseSearchParams()
-recordKeeper.logger.info("Spreadsheet data read & parsed!")
-exit()
+utils.logger.info("Spreadsheet data read & parsed!")
+
 #TO-DO: move this to a separate function?
-if countLeadsSheet > 0:
-    maxLeadCreatedStr = str(max(pd.to_datetime(sheetReader.sheetLeadsFrame["date_of_creation"])))[:10]
-    maxLeadCreatedDate = dt.strptime(maxLeadCreatedStr, "%Y-%m-%d").date()
-    #TO-DO: LOG step of adjusting days_back_parameter
-    daysFromLastLead = getDaysDelta(lastLeadDate = maxLeadCreatedDate)
-    searchParams["days_back"] = daysFromLastLead
-    del maxLeadCreatedStr, maxLeadCreatedDate
+if len(sheetReader.leadFrame) > 0:
+    #Override days back parameter for performing search if lead table has entries
+    utils.checkMaxDate(sheetReader.leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
 #filter dates for leads, then use getDaysDelta() to compute days_back
-searchDates = createSearchDates(searchParams["days_back"])
+searchDates = utils.createSearchDates(searchParams["days_back"])
+utils.logger.info("Generated search dates")
 #init connector
 connector = Connector(
     rate = RATE,
     limit = asyncio.Semaphore(LIMIT)
 )
+utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio
 tasks = []
 for day in searchDates:
-    params = createParams(headerBase = searchParams["headers"], day = day)
+    params = utils.createParams(headerBase = searchParams["headers"], day = day)
     paramsCopy = params.copy()
     tasks.append(
         connector.makeRequest(
@@ -117,3 +126,4 @@ loop.close()
 print("Done with ASYNC")
 print("########################################################################################")   
 print("Results:")
+print(manager.searchStorage)
