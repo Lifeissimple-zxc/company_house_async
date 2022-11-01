@@ -84,15 +84,12 @@ sheetReader = sheetManager(
 )
 utils.logger.info("Sheet Manager Instantiated")
 
-sheetReader.connect()
-sheetReader.openSheet(GSHEET_ID)
-sheetReader.validateSheet()
-sheetReader.readControlPanel()
-sheetReader.readLeadsTable()
-searchParams = sheetReader.parseSearchParams()
-utils.logger.info("Spreadsheet data read & parsed!")
+searchParams, prepErr = sheetReader.prepareSeachInputs(sheetId = GSHEET_ID)
+if prepErr is not None:
+    utils.logger.error(f"Search params preparation error: {prepErr}")
 
-#TO-DO: move this to a separate function?
+utils.logger.info("Search inputs prepared")
+
 if len(sheetReader.leadFrame) > 0:
     #Override days back parameter for performing search if lead table has entries
     utils.checkMaxDate(sheetReader.leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
@@ -108,7 +105,7 @@ utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio
 tasks = []
 for day in searchDates:
-    params = utils.createParams(headerBase = searchParams["headers"], day = day)
+    params = utils.createParams(headerBase = searchParams["params"], day = day)
     paramsCopy = params.copy()
     tasks.append(
         connector.makeRequest(
