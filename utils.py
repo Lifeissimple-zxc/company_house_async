@@ -36,7 +36,7 @@ class utilMaster:
 
     def createSearchDates(self, daysBack):
         try:
-            return [date.today() - timedelta(days = x) for x in range(daysBack)]
+            return [date.today() - timedelta(days = x) for x in range(daysBack + 1)]
         except Exception as e:
             self.logger.error(f"Search daterange computation error: {e}")
             return None

@@ -22,7 +22,8 @@ from constants import (
     LOG_FILE_NAME,
     LOG_FOLDER,
     TIMEZONE,
-    SHEET_SCHEMA_PATH
+    SHEET_SCHEMA_PATH,
+    CACHE_DB
 )
 from logging import handlers
 from customLogger import customLogger
@@ -72,7 +73,7 @@ if "win" in str(sys.platform).lower():
     utils.logger.info("Event policy set, this is a windows-specific step!")
 
 #Init lead manager
-manager = LeadManager()
+manager = LeadManager(cache = CACHE_DB)
 utils.logger.info("Lead Manager Instantiated")
 
 #Read Spreadsheet Data
@@ -97,10 +98,7 @@ if len(sheetReader.leadFrame) > 0:
 searchDates = utils.createSearchDates(searchParams["days_back"])
 utils.logger.info("Generated search dates")
 #init connector
-connector = Connector(
-    rate = RATE,
-    limit = asyncio.Semaphore(LIMIT)
-)
+connector = Connector(rate = RATE, limit = asyncio.Semaphore(LIMIT))
 utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio
 tasks = []
@@ -115,7 +113,7 @@ for day in searchDates:
         storage = manager.searchStorage
         )
     )
-
+#Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(tasks))
 loop.close()
@@ -123,4 +121,5 @@ loop.close()
 print("Done with ASYNC")
 print("########################################################################################")   
 print("Results:")
-print(manager.searchStorage)
+#TO-DO: thing of datapoints we need to extract: maybe add to control panel?
+df = manager.parseSearcResuts(colsToSave = LEAD_SHEET_SCHEMA.values())
