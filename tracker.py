@@ -5,6 +5,7 @@ import pandas as pd
 import json
 import logging
 import sys
+from uuid import uuid4
 from pytz import timezone
 from leadManager import LeadManager
 from utils import utilMaster
@@ -39,6 +40,8 @@ GSHEET_CONTROL_PANEL_NAME = os.getenv("GSHEET_CONTROL_PANEL_NAME")
 GSHEET_LEAD_TABLE_NAME = os.getenv("GSHEET_LEAD_TABLE_NAME")
 #Instantiate utils class
 utils = utilMaster()
+#Generate search run metadata
+searchMeta, err = utils.generateRunMetaData()
 #Create logger dir, TO-DO: check if error can be handled here
 utils.softDirCreate(LOG_FOLDER)
 #Configure logger
@@ -122,4 +125,12 @@ print("Done with ASYNC")
 print("########################################################################################")   
 print("Results:")
 #TO-DO: thing of datapoints we need to extract: maybe add to control panel?
-df = manager.parseSearcResuts(colsToSave = LEAD_SHEET_SCHEMA.values())
+#parse addresses
+#parse string codes
+# df = manager.parseSearcResuts(colsToSave = LEAD_SHEET_SCHEMA.values())
+#Get cols that we need from results
+colsToSave, err = sheetReader.getColsToKeep()
+manager.parseSearcResults(colsToSave)
+# for index, row in manager.searchResults.iterrows():
+#     print(row["registered_office_address"].items())
+manager.writeCache()

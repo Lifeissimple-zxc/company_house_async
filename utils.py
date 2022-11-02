@@ -6,6 +6,7 @@ from os import makedirs
 from os.path import join
 from typing import Union
 from logging import Logger
+from uuid import uuid4
 
 
 class utilMaster:
@@ -86,6 +87,16 @@ class utilMaster:
         except Exception as e:
             self.logger.error(f"Yaml read error: {e}")
             return None
+    
+    def generateRunMetaData(self) -> dict:
+        """
+        Function that generates run uuid and its start time
+        """
+        try:
+            return {"id": str(uuid4()), "start_ts": datetime.utcnow()}, None 
+        except Exception as e:
+            self.logger.error(f"Metadata generation error: {e}")
+            return None, e
 
 
              

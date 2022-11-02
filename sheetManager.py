@@ -74,6 +74,7 @@ class sheetManager:
             self.controlPanelFrame = pd.DataFrame(self.panelSheet.get_as_df()).clean_names()
         except Exception as e:
             self.logger.error(f"Control panel reading error: {e}")
+            return e
     
    
     def readLeadsTable(self):
@@ -124,6 +125,18 @@ class sheetManager:
         except Exception as e:
             self.logger.error(f"Search params parsing error: {e}")
             return None
+    
+    def getColsToKeep(self) -> list:
+        """
+        Reads columns to keep from searched data
+        """
+        try:
+            colsStr = self.controlPanelFrame.query("parameter == 'cols_to_keep'")["actual_input"].values[0]
+            cols = colsStr.split(";\n")
+            return cols, None
+        except Exception as e:
+            self.logger.error(f"Cols to keep reading error: {e}")
+            return None, e
     
     def prepareSeachInputs(self, sheetId: str, validation = True) -> tuple:
         """
