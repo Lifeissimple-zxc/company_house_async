@@ -5,5 +5,6 @@ leadSheetColumns:
     dateCreated: "date_of_creation"
     companyType: "company_type"
     sicCodes: "sic_codes_string"
-    runTs: "run_added_ts"
+    runId: "added_on_run_id"
+    runTs: "added_run_ts"
     officerNames: "company_officer_names"
