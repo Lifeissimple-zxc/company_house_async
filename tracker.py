@@ -61,6 +61,8 @@ logging.basicConfig(
 logging.Formatter.converter = lambda *args: dt.now(tz=timezone(TIMEZONE)).timetuple()
 #Perform logger assignment
 utils.assignLogger(logging.getLogger("mainLogger"))
+utils.logger.info("##########################################################################\n")
+utils.logger.info(f"Run ID {searchMeta['run_id']} starts...")
 utils.logger.info("Instantiated logger and assigned it to utils instance")
 #Read YAML
 YAML_CONTENTS = utils.readYaml(SHEET_SCHEMA_PATH)
@@ -68,15 +70,12 @@ if YAML_CONTENTS is None:
     pass #TO-DO smth here if yaml is not read
 LEAD_SHEET_SCHEMA = YAML_CONTENTS["leadSheetColumns"]
 
-#Test params - remove?
-#  TEST_PARAMS = {'headers': {'company_status': 'active,open', 'sic_codes': '56101,56102,56103'}, 'days_back': 30}
 #Prepare to run async steps
 if "win" in str(sys.platform).lower():
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
     utils.logger.info("Event policy set, this is a windows-specific step!")
-
 #Init lead manager
-manager = LeadManager(cache = CACHE_DB)
+manager = LeadManager(cache = CACHE_DB, logger = utils.logger)
 utils.logger.info("Lead Manager Instantiated")
 
 #Read Spreadsheet Data
@@ -91,7 +90,6 @@ utils.logger.info("Sheet Manager Instantiated")
 searchParams, prepErr = sheetReader.prepareSeachInputs(sheetId = GSHEET_ID)
 if prepErr is not None:
     utils.logger.error(f"Search params preparation error: {prepErr}")
-
 utils.logger.info("Search inputs prepared")
 
 if len(sheetReader.leadFrame) > 0:
@@ -104,33 +102,43 @@ utils.logger.info("Generated search dates")
 connector = Connector(rate = RATE, limit = asyncio.Semaphore(LIMIT))
 utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio
-tasks = []
+searchTasks = []
 for day in searchDates:
     params = utils.createParams(headerBase = searchParams["params"], day = day)
     paramsCopy = params.copy()
-    tasks.append(
+    searchTasks.append(
         connector.makeRequest(
-        url = SEARCH_URL,
-        auth = BasicAuth(REST_KEY, ""),
-        params = paramsCopy,
-        storage = manager.searchStorage
+            url = SEARCH_URL,
+            logger = utils.logger,
+            auth = BasicAuth(REST_KEY, ""),
+            params = paramsCopy,
+            storage = manager.searchStorage,
+            toRetry = manager.toRetryList
         )
     )
 #Make search requests
 loop = asyncio.get_event_loop()
-loop.run_until_complete(performTasks(tasks))
+loop.run_until_complete(performTasks(searchTasks))
 loop.close()
-#Storage of the companies needs to be rewritten :()
-print("Done with ASYNC")
-print("########################################################################################")   
-print("Results:")
-#TO-DO: thing of datapoints we need to extract: maybe add to control panel?
-#parse addresses
-#parse string codes
-# df = manager.parseSearcResuts(colsToSave = LEAD_SHEET_SCHEMA.values())
-#Get cols that we need from results
+#Log search success
+utils.logger.info("Search completed. Saving to cache...")
+#Cache results and 429s to later retry
 colsToSave, err = sheetReader.getColsToKeep()
-manager.parseSearcResults(colsToSave)
-# for index, row in manager.searchResults.iterrows():
-#     print(row["registered_office_address"].items())
-manager.writeCache()
+manager.cacheSearch(colsToSave, runMetaData = searchMeta)
+manager.cacheRetries()
+#Check what cache results needs to be appended to the sheet
+cachedAppend = manager.getCachedToAppend(
+    existingIds = sheetReader.leadFrame[LEAD_SHEET_SCHEMA["companyNumber"]].values,
+    runMetaData = searchMeta
+)
+print(cachedAppend)
+#Merge current search with cacheAppend
+#Deduplicate, keep first
+#CALL API for officers, mb cache as well? Skip cached entries that have this data
+#Append to Gsheet
+#Clean Cache
+#Message to discord?
+
+
+#TO-DO check if cache has records that are not in sheet manager: append & clean cache, should be done at the beginning!
+

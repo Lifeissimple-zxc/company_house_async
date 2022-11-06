@@ -42,7 +42,7 @@ class utilMaster:
             self.logger.error(f"Search daterange computation error: {e}")
             return None
 
-    def createParams(self, headerBase: dict, day: date) -> tuple:
+    def createParams(self, headerBase: dict, day: date) -> Union[dict, Exception]:
         try:
             output = headerBase
             output["incorporated_from"] = str(day)
@@ -93,7 +93,7 @@ class utilMaster:
         Function that generates run uuid and its start time
         """
         try:
-            return {"id": str(uuid4()), "start_ts": datetime.utcnow()}, None 
+            return {"run_id": str(uuid4()), "run_start_ts": datetime.utcnow()}, None 
         except Exception as e:
             self.logger.error(f"Metadata generation error: {e}")
             return None, e
