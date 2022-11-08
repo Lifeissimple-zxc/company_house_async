@@ -101,7 +101,7 @@ utils.logger.info("Generated search dates")
 #init connector
 connector = Connector(rate = RATE, limit = asyncio.Semaphore(LIMIT))
 utils.logger.info("Connector instantiated")
-#Generate Tasks for asyncio
+#Generate Tasks for asyncio - base search
 searchTasks = []
 for day in searchDates:
     params = utils.createParams(headerBase = searchParams["params"], day = day)
@@ -116,6 +116,24 @@ for day in searchDates:
             toRetry = manager.toRetryList
         )
     )
+utils.logger.info("Prepared search request tasks")
+#Add seacrch retries from cache
+searchRetries = manager.getCachedRetries("search")
+#TO-DO: maybe keep it in a separate function?
+if len(searchRetries) > 0:
+    searchRetries = searchRetries["url"].values
+    for url in searchRetries:
+        searchTasks.append(
+            connector.makeRequest(
+                url = url,
+                logger = utils.logger,
+                auth = BasicAuth(REST_KEY, ""),
+                storage = manager.searchStorage,
+                toRetry = manager.toRetryList
+            )
+        )
+    manager.deleteRetryEntries(searchRetries)
+    utils.logger.info("Added search entries to retry from cache")
 #Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(searchTasks))
@@ -125,17 +143,19 @@ utils.logger.info("Search completed. Saving to cache...")
 #Cache results and 429s to later retry
 colsToSave, err = sheetReader.getColsToKeep()
 manager.cacheSearch(colsToSave, runMetaData = searchMeta)
-manager.cacheRetries()
+manager.cacheRetries("search")
 #Check what cache results needs to be appended to the sheet
 cachedAppend = manager.getCachedToAppend(
     existingIds = sheetReader.leadFrame[LEAD_SHEET_SCHEMA["companyNumber"]].values,
     runMetaData = searchMeta
 )
-print(cachedAppend)
-#Merge current search with cacheAppend
-#Deduplicate, keep first
+#Clean data before further processing
+searchResults, tidyErr = manager.tidySearchResults(cachedAppend)
+print(searchResults)
 #CALL API for officers, mb cache as well? Skip cached entries that have this data
-#Append to Gsheet
+#Append to Gsheet: make sure that data to append is not duplicate
+#Repeat requests for 429s: START WITH THIS, should happen before we are working on cache! MB start run with it actually? A step in initial search?
+# add type of request (search | officer) to 429 cache?
 #Clean Cache
 #Message to discord?
 
