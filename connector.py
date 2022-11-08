@@ -15,9 +15,9 @@ class Connector:
         logger: Logger,
         url: str,
         auth: aiohttp.BasicAuth,
-        params: dict,
         storage: list,
-        toRetry: list) -> None:
+        toRetry: list,
+        params: dict = None) -> None:
         """
         Async function for making http requests to company house API
         """

@@ -59,16 +59,19 @@ class LeadManager:
         with dataset.connect(self.cache) as conn:
             conn[self.cacheTable].insert_many(records)
     
-    def processRetries(self) -> tuple:
+    def processRetries(self, retryType: str) -> tuple:
         """
         Processes list of retry urls to a list of dicts
+        Retry type is needed to correctly handle cash
         """
+        if retryType not in ("search", "company", "search"):
+            raise Exception("""Wrong value for retryType input, should be in ("search", "company", "search")""")
         try:
-            return [{"url": item} for item in self.toRetryList], None
+            return [{"url": item, "type": retryType} for item in self.toRetryList], None
         except Exception as e:
             return None, e
 
-    def cacheRetries(self) -> Union[None, Exception]:
+    def cacheRetries(self, retryType: str) -> Union[None, Exception]:
         """
         Write 429 request urls to cache for retries
         """
@@ -79,7 +82,7 @@ class LeadManager:
                 self.logger.info("No retry URLs to cache :(")
                 return
 
-            records, err = self.processRetries()
+            records, err = self.processRetries(retryType)
             if err is not None:
                 self.logger.error(f"Retry cache preparation error: {err}")
                 return err
@@ -87,6 +90,8 @@ class LeadManager:
             with dataset.connect(self.cache) as conn:
                 conn[self.rertyTable].insert_many(records)
             self.logger.info(f"Wrote {retryCnt} to cache")
+            #Clean list so that it could be re-used for different type of retries
+            self.toRetryList = []
             
         except Exception as e:
             self.logger.error(f"Retries caching error: {e}")         
@@ -108,9 +113,59 @@ class LeadManager:
                 """, runId = runId
             )
         df = pd.DataFrame(results)
-        df.drop(columns = ['id'], inplace = True)
+        try:
+            df.drop(columns = ['id'], inplace = True)
+        except KeyError:
+            pass
         return df
         #TO-DO: Exceptions handling
+    
+    def getCachedRetries(self, retryType: str):
+        """
+        Selects entries from retries cache filtered by a given type to pandas
+        """
+        #TO-DO: Handle retries
+        with dataset.connect(self.cache) as conn:
+            results = conn.query(
+                f"""
+                SELECT url FROM retries
+                WHERE type = :retryType
+                """, retryType = retryType
+            )
+        return pd.DataFrame(results)
+    
+    def deleteRetryEntries(self, urls: list):
+        """
+        Removes rows from retry cache
+        """
+        toDelete = [f"\'{url}\'" for url in urls]
+        print(toDelete)
+        toDelete = f"({','.join(toDelete)})"
+        print(toDelete)
+        with dataset.connect(self.cache) as conn:
+            conn.query(
+                f"""
+                DELETE FROM {self.rertyTable}
+                WHERE url IN {toDelete}
+                """
+            )
+    
+    def tidySearchResults(self, cacheDf: pd.DataFrame) -> tuple:
+        """
+        Merges processedSearch with cacheDf and cleans it
+        """
+        try:
+            df =  pd.concat([self.processedSearch, cacheDf], ignore_index = True)
+            df["added_run_ts"] = pd.to_datetime(df["added_run_ts"])
+            df.sort_values(by = "added_run_ts", ascending= True, inplace = True)
+            df.drop_duplicates(subset = "company_number", inplace = True, keep = "first")
+            df.reset_index(inplace = True, drop = True)
+            return df, None
+        except Exception as e:
+            self.logger.error(f"Search & Cache cleaning faced error: {e}")
+            return None, e
+
+
 
 
 
