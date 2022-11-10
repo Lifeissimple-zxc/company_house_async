@@ -109,6 +109,7 @@ for day in searchDates:
     searchTasks.append(
         connector.makeRequest(
             url = SEARCH_URL,
+            requestType = "search",
             logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             params = paramsCopy,
@@ -126,6 +127,7 @@ if len(searchRetries) > 0:
         searchTasks.append(
             connector.makeRequest(
                 url = url,
+                requestType = "search",
                 logger = utils.logger,
                 auth = BasicAuth(REST_KEY, ""),
                 storage = manager.searchStorage,
@@ -137,7 +139,7 @@ if len(searchRetries) > 0:
 #Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(searchTasks))
-loop.close()
+# loop.close()
 #Log search success
 utils.logger.info("Search completed. Saving to cache...")
 #Cache results and 429s to later retry
@@ -152,9 +154,34 @@ cachedAppend = manager.getCachedToAppend(
 #Clean data before further processing
 searchResults, tidyErr = manager.tidySearchResults(cachedAppend)
 print(searchResults)
-#CALL API for officers, mb cache as well? Skip cached entries that have this data
+#CALL API for officers
+#Generate request tasks
+officerTasks = []
+for companyNumber in searchResults["company_number"]:
+    officerUrl = f"{REST_URL}/company/{companyNumber}/officers"
+    officerTasks.append(
+        connector.makeRequest(
+            url = officerUrl,
+            requestType = "officers",
+            logger = utils.logger,
+            auth = BasicAuth(REST_KEY, ""),
+            storage = manager.officerStorage,
+            toRetry = manager.toRetryList
+        )
+    )
+utils.logger.info("Prepared tasks for officer requests")
+# loop = asyncio.get_running_loop()
+loop.run_until_complete(performTasks(officerTasks))
+loop.close()
+#https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
+#Issue from the above
+utils.logger.info("Officer data collected")
+#Check for officer retries
+#Join data with searchResults
 #Append to Gsheet: make sure that data to append is not duplicate
 #Repeat requests for 429s: START WITH THIS, should happen before we are working on cache! MB start run with it actually? A step in initial search?
+#Check existing sheet for missing officers data?
+#Maybe append search and the re-read leads?
 # add type of request (search | officer) to 429 cache?
 #Clean Cache
 #Message to discord?
