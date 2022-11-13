@@ -28,7 +28,8 @@ from constants import (
 )
 from logging import handlers
 from customLogger import customLogger
-
+#Read platform - needed for windows-specific steps
+IS_WINDOWS = "win" in str(sys.platform).lower()
 #Read ENV variables - pass to a separrate function or file?
 load_dotenv()
 REST_URL = os.getenv("REST_BASE_URL")
@@ -71,7 +72,7 @@ if YAML_CONTENTS is None:
 LEAD_SHEET_SCHEMA = YAML_CONTENTS["leadSheetColumns"]
 
 #Prepare to run async steps
-if "win" in str(sys.platform).lower():
+if IS_WINDOWS:
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
     utils.logger.info("Event policy set, this is a windows-specific step!")
 #Init lead manager
@@ -169,22 +170,33 @@ for companyNumber in searchResults["company_number"]:
             toRetry = manager.toRetryList
         )
     )
+#Split requests into chunks because windows cannot handle high volume task lists
+#TO-DO: maybe process officer tasks as a separate function?
+print(len(officerTasks))
+if IS_WINDOWS:
+    if len(officerTasks) > 60: #TO-DO make this a param?
+        officerTaskChunks = utils.splitToChunks(officerTasks, 60)
+    else:
+        officerTaskChunks = [officerTasks]
 utils.logger.info("Prepared tasks for officer requests")
-# loop = asyncio.get_running_loop()
-loop.run_until_complete(performTasks(officerTasks))
+for chunk in officerTaskChunks:
+    print("##################NEW CHUNK#####################")
+    loop.run_until_complete(performTasks(chunk))
 loop.close()
 #https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
 #Issue from the above
 utils.logger.info("Officer data collected")
+print(manager.officerStorage)
 #Check for officer retries
+#process officer data to get names only - maybe
 #Join data with searchResults
 #Append to Gsheet: make sure that data to append is not duplicate
 #Repeat requests for 429s: START WITH THIS, should happen before we are working on cache! MB start run with it actually? A step in initial search?
-#Check existing sheet for missing officers data?
 #Maybe append search and the re-read leads?
-# add type of request (search | officer) to 429 cache?
+#make retry a decorator? Just as a learning exercise
 #Clean Cache
 #Message to discord?
+#loop cleaning and closing
 
 
 #TO-DO check if cache has records that are not in sheet manager: append & clean cache, should be done at the beginning!
