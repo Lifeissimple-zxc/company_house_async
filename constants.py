@@ -1,6 +1,6 @@
 SEARCH_URL = "https://api.company-information.service.gov.uk/advanced-search/companies"
 LIMIT = 600 #move to config? #600 actual value: https://developer-specs.company-information.service.gov.uk/guides/rateLimiting
-RATE = 10 #move to config? #300 check above
+RATE = 300 #move to config? #300 check above
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s" #TO-DO: show function / more context here
 LOG_FILE_NAME = "leadTracker.log"
 LOG_FOLDER = "Logs"
