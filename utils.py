@@ -98,6 +98,15 @@ class utilMaster:
             self.logger.error(f"Metadata generation error: {e}")
             return None, e
 
+    @staticmethod
+    def splitToChunks(array: list, chunkSize: int) -> list:
+        """
+        Splits a list into chunks of given size
+        :param array[list] list of items to be split to chunks:
+        :param chunkSize[int] size defining the items in one chunk:
+        :return nested list:
+        """
+        return [array[i:i + chunkSize] for i in range(0, len(array), chunkSize)]
 
              
 
