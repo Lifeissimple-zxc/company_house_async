@@ -28,17 +28,30 @@ class Connector:
             raise Exception(f"Wrong input for request task: {requestType}. Expected ('search', 'officers')")
         async with self.limit:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url = url, auth = auth, params = params) as resp:
-                    dataJson  = await resp.json(content_type = None)
-                    if (status := resp.status) != 200:
-                        rUrl = resp.url
-                        logger.warning(f"Got {status} for {rUrl}")
-                        #Handle 429 separately
-                        if status == 429:
-                            toRetry.append(rUrl)
-                            await asyncio.sleep(self.rate)
-                        return
-                    #Check if data JSON is none - log this
+                resp = await session.get(url = url, auth = auth, params = params)
+                #async with session.get(url = url, auth = auth, params = params) as resp:
+                dataJson = await resp.json(content_type = None)
+                rUrl = resp.url
+                if (status := resp.status) != 200:
+                    logger.warning(f"Got {status} for {rUrl}, sleeping for {self.rate} to retry")
+                    #Handle 429 separately
+                    if status == 429:
+                        await asyncio.sleep(self.rate)
+                        #Retry on the spot
+                        retry = await session.get(
+                            url = rUrl, auth = auth
+                        )
+                        if (retryStatus := retry.status) == 200:
+                            logger.info(f"Successful retry for {rUrl}")
+                            dataJson  = await retry.json(content_type = None)
+                        else:
+                            logger.warning(f"Got {retryStatus} for {rUrl} after retry")
+                            if retryStatus == 429:
+                                logger.warning(f"Saving {rUrl} to retry cache")
+                                toRetry.append(rUrl)
+                #Check if data JSON is none - log this
+                if dataJson is not None:
+                    logger.info(f"Saving valid response from {rUrl}...")
                     if requestType == "officers":
                         storage.append({
                             "companyNumber": companyNumber,
