@@ -119,6 +119,7 @@ for day in searchDates:
         )
     )
 utils.logger.info("Prepared search request tasks")
+#Add search urls from cache
 err = manager.processRetryCache(
     retryType = "search",
     taskList = searchTasks,
@@ -128,24 +129,6 @@ err = manager.processRetryCache(
 )
 if err is not None:
     utils.logger.error(f"Error processing search retries: {err}")
-# #Add seacrch retries from cache
-# searchRetries = manager.getCachedRetries("search")
-# #TO-DO: maybe keep it in a separate function?
-# if len(searchRetries) > 0:
-#     searchRetries = searchRetries["url"].values
-#     for url in searchRetries:
-#         searchTasks.append(
-#             connector.makeRequest(
-#                 url = url,
-#                 requestType = "search",
-#                 logger = utils.logger,
-#                 auth = BasicAuth(REST_KEY, ""),
-#                 storage = manager.searchStorage,
-#                 toRetry = manager.toRetryList
-#             )
-#         )
-#     manager.deleteRetryEntries(searchRetries)
-#     utils.logger.info("Added search entries to retry from cache")
 #Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(searchTasks))
@@ -161,10 +144,12 @@ cachedAppend = manager.getCachedToAppend(
     runMetaData = searchMeta
 )
 #Clean data before further processing
-searchResults, tidyErr = manager.tidySearchResults(cachedAppend)
-print(searchResults)
+searchResults, tidyErr = manager.tidySearchResults(
+    cacheDf = cachedAppend,
+    sheetCompanyNumbers = list(sheetReader.leadFrame["company_number"].values)
+    )
 #CALL API for officers
-#Generate request tasks
+#Generate request tasks, url task list is needed to avoid duplication
 officerTasks, officerTaskUrls = [], []
 for companyNumber in searchResults["company_number"]:
     officerUrl = f"{REST_URL}/company/{companyNumber}/officers"
@@ -198,20 +183,24 @@ if IS_WINDOWS:
 utils.logger.info("Prepared tasks for officer requests")
 #TO-DO: maybe put the below to a function
 for chunk in officerTaskChunks:
-    print("##################NEW CHUNK#####################")
     loop.run_until_complete(performTasks(chunk))
-loop.close()
+loop.close() #TO-DO: move to another spot?
 #https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
 #Issue from the above
 utils.logger.info("Officer data collected")
-# Process officer data to get names only - already WIP in leadManager
-# Update handling retries for officer as we need company id there
-print(manager.officerStorage)
-# Join data with searchResults
-#Append to Gsheet: make sure that data to append is not duplicate
-#Clean Cache
+officersCleaned = manager.tidyOfficerResults()
+mergedData = pd.merge(searchResults, officersCleaned, on = "company_number", how = "left")
+#Align column order
+mergedData = mergedData[LEAD_SHEET_SCHEMA.values()]
+utils.logger.info("Sheet update prepared")
+sheetReader.appendToSheet(df = mergedData)
+utils.logger.info("New leads have been appended to sheet")
+# Figure out how to make semaphore work properly
+# Merge connector and leadManager (inheritance)
+# Clean Cache + Retry
 #Message to discord? Can it be made a part of logging?
 #loop cleaning and closing
+
 
 
 #TO-DO check if cache has records that are not in sheet manager: append & clean cache, should be done at the beginning!

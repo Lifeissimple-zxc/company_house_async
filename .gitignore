@@ -1,1 +1,13 @@
 .env
+__pycache__/
+playground.py
+company_async_venv/
+tests.py
+from_video/
+.gitignore
+env/
+Logs/
+#Cache
+*.db
+*.db*
+*.sqb*

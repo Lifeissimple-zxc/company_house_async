@@ -60,7 +60,7 @@ class LeadManager:
         with dataset.connect(self.cache) as conn:
             conn[self.cacheTable].insert_many(records)
     
-    def processRetries(self, retryType: str) -> tuple:
+    def processRetries(self, retryType: str, companyNumber: str = None) -> tuple:
         """
         Processes list of retry urls to a list of dicts
         Retry type is needed to correctly handle cash
@@ -68,7 +68,9 @@ class LeadManager:
         if retryType not in ("search", "company", "officers"):
             raise Exception("""Wrong value for retryType input, should be in ("search", "company", "search")""")
         try:
-            return [{"url": item, "type": retryType} for item in self.toRetryList], None
+            if companyNumber is None:
+                companyNumber = ""
+            return [{"url": item, "type": retryType, "company_number": companyNumber} for item in self.toRetryList], None
         except Exception as e:
             return None, e
 
@@ -83,13 +85,8 @@ class LeadManager:
                 self.logger.info("No retry URLs to cache :(")
                 return
 
-            records, err = self.processRetries(retryType)
-            if err is not None:
-                self.logger.error(f"Retry cache preparation error: {err}")
-                return err
-
             with dataset.connect(self.cache) as conn:
-                conn[self.rertyTable].insert_many(records)
+                conn[self.rertyTable].insert_many(self.toRetryList)
             self.logger.info(f"Wrote {retryCnt} to cache")
             #Clean list so that it could be re-used for different type of retries
             self.toRetryList = []
@@ -153,15 +150,19 @@ class LeadManager:
                 """
             )
     
-    def tidySearchResults(self, cacheDf: pd.DataFrame) -> tuple:
+    def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: list) -> tuple:
         """
         Merges processedSearch with cacheDf and cleans it
         """
         try:
+            # Merge with cache
             df =  pd.concat([self.processedSearch, cacheDf], ignore_index = True)
+            # Clean Data
             df["added_run_ts"] = pd.to_datetime(df["added_run_ts"])
             df.sort_values(by = "added_run_ts", ascending= True, inplace = True)
             df.drop_duplicates(subset = "company_number", inplace = True, keep = "first")
+            # Remove overlap with companies present in the sheet
+            df = df[~df["company_number"].isin(sheetCompanyNumbers)]
             df.reset_index(inplace = True, drop = True)
             return df, None
         except Exception as e:
@@ -227,39 +228,37 @@ class LeadManager:
         """
         try:
             officers = [f"{officer['officer_role']}: {officer['name']}" for officer in officerJson]
-            officerStr = ", ".join(officers)
+            officerStr = "; ".join(officers)
             return officerStr, None
         except Exception as e:
             return None, e
-
-    def parseOfficerEntries(self, officerStorageEntry) -> str:
-        """
-        Uses parseOfficerData to iteratively apply it to officerList resource
-        """
-        companyNumber = officerStorageEntry["officerStorageEntry"]
-        officerDataList = officerStorageEntry["data"]
-        fullOfficerData = []
-        for entry in officerDataList:
-            officerStr, err = self.parseOfficerData(entry)
-            if err is not None:
-                self.logger.error(f"Failed to parse officer data for {companyNumber}, output might be incomplete")
-            fullOfficerData.append(officerStr)
-        return companyNumber, ";"
-
     
     def tidyOfficerResults(self) -> pd.DataFrame:
         """
-        Transforms list of officer dict to a dataframe that can be convenietly joined with other company data
+        Transforms list of officer dicts to a dataframe that can be convenietly joined with other company data
         """
         outframe = pd.DataFrame(columns = ["company_number", "company_officer_names"])
         for entry in self.officerStorage:
             companyNumber = entry["companyNumber"]
-            officerListRaw = entry["data"]
-            for officerJson in officerListRaw:
-                officerInfo, err = self.parseOfficerData(officerJson = officerJson)
-                if err is not None:
-                    self.logger.error(f"Failed to parse officer data for {companyNumber}, output might be incomplete")
+            officerData, err = self.parseOfficerData(entry["data"])
+            if err is not None:
+                self.logger.error(f"Failed to parse officer data for company {companyNumber}. Data might be incomplete")
+            row = pd.DataFrame({
+                "company_number": [companyNumber],  "company_officer_names": [officerData]
+            })
+            outframe = pd.concat([outframe, row], ignore_index = True)
+        return outframe
 
+    def resetCacheTable(self):
+        # with dataset.connect(self.cache) as conn:
+        #     conn.query(
+        #         f"""
+        #         SELECT * FROM {self.cacheTable}
+        #         WHERE added_on_run_id <> :runId
+        #         AND company_number NOT IN {existingCompanies}
+        #         """, runId = runId
+        #     )
+        pass
 
 
 

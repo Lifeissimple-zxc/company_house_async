@@ -81,6 +81,8 @@ class sheetManager:
         try:
             self.leadSheet = self.spreadsheet.worksheet_by_title(self.leadsSheetName)
             self.leadFrame = pd.DataFrame(self.leadSheet.get_as_df()).clean_names()
+            #Remove rows from df that are fully empty
+            self.leadFrame.dropna(how = "all", inplace = True)
             return None
         except Exception as e:
             self.logger.error(f"Reading leads table error: {e}")
@@ -159,4 +161,15 @@ class sheetManager:
             return self.parseSearchParams(), None
         except Exception as e:
             return None, e
+
+    def appendToSheet(self, df: pd.DataFrame):
+        """"
+        Appends dataframe to the sheet
+        """
+        leadRows = len(self.leadFrame) + 1
+        df["added_run_ts"] = df["added_run_ts"].astype(str)
+        rowsUpdate = df.values.tolist()
+        self.leadSheet.insert_rows(leadRows, number = len(df), values = rowsUpdate)
+        
+        pass
 

@@ -10,6 +10,21 @@ class Connector:
         self.rate = rate
         self.limit = limit
 
+    @staticmethod
+    def cacheForRetry(url, requestType: str, companyNumber: str = None):
+        """
+        Function for handling retry caching logic
+        """
+        assert requestType in ("search", "officers"), "Request type needs to be in (search, officers)"
+        #TO-DO: exceptions
+        if companyNumber is None:
+            companyNumber = ""
+        return {
+            "url": url,
+            "requestType": requestType,
+            "companyNumber": companyNumber
+        }
+
     async def makeRequest(
         self,
         requestType: str,
@@ -47,10 +62,14 @@ class Connector:
                             logger.warning(f"Got {retryStatus} for {rUrl} after retry")
                             if retryStatus == 429:
                                 logger.warning(f"Saving {rUrl} to retry cache")
-                                toRetry.append(rUrl)
+                                self.cacheForRetry(
+                                    url = rUrl,
+                                    requestType = requestType,
+                                    companyNumber = companyNumber
+                                )
                 #Check if data JSON is none - log this
                 if dataJson is not None:
-                    logger.info(f"Saving valid response from {rUrl}...")
+                    logger.info(f"Saving valid response from {rUrl}")
                     if requestType == "officers":
                         storage.append({
                             "companyNumber": companyNumber,
