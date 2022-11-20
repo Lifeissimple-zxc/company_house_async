@@ -2,7 +2,8 @@ import pandas as pd
 import dataset
 from typing import Union
 from logging import Logger
-
+from connector import Connector
+from aiohttp import BasicAuth
 
 class LeadManager:
     """
@@ -64,7 +65,7 @@ class LeadManager:
         Processes list of retry urls to a list of dicts
         Retry type is needed to correctly handle cash
         """
-        if retryType not in ("search", "company", "search"):
+        if retryType not in ("search", "company", "officers"):
             raise Exception("""Wrong value for retryType input, should be in ("search", "company", "search")""")
         try:
             return [{"url": item, "type": retryType} for item in self.toRetryList], None
@@ -124,15 +125,17 @@ class LeadManager:
         """
         Selects entries from retries cache filtered by a given type to pandas
         """
-        #TO-DO: Handle retries
-        with dataset.connect(self.cache) as conn:
-            results = conn.query(
-                f"""
-                SELECT url FROM retries
-                WHERE type = :retryType
-                """, retryType = retryType
-            )
-        return pd.DataFrame(results)
+        try:
+            with dataset.connect(self.cache) as conn:
+                results = conn.query(
+                    f"""
+                    SELECT url FROM retries
+                    WHERE type = :retryType
+                    """, retryType = retryType
+                )
+            return pd.DataFrame(results), None
+        except Exception as e:
+            return None, e
     
     def deleteRetryEntries(self, urls: list):
         """
@@ -164,6 +167,100 @@ class LeadManager:
         except Exception as e:
             self.logger.error(f"Search & Cache cleaning faced error: {e}")
             return None, e
+
+    def processRetryCache(
+        self,
+        retryType: str,
+        taskList: list,
+        connector: Connector,
+        auth: BasicAuth,
+        dbClean = True,
+        companyNumber: str = None,
+        taskUrlLog: list = None) -> Union[None, Exception]:
+        """
+        Queries urls for retrying from local DB and adds them to a list of tasks for Asyncio event loop
+        """
+        retryFrame, err = self.getCachedRetries(retryType = retryType)
+        if err is not None:
+            self.logger.error(f"Error when getting retry urls of {retryType} type: {err}")
+            return err
+        # Handle case where we have no retries to process
+        if (cntRetries := len(retryFrame)) == 0:
+            self.logger.info("No retries to process")
+            return None
+        # Actual processing of data if we get any
+        else:
+            # This handles only two options, needs to be rewritten if we decide to do more
+            storage = self.searchStorage if retryType == "search" else self.officerStorage
+            retryLinks = retryFrame["url"].values
+            for url in retryLinks:
+                #Make sure that we don't add duplicate urls by using data from cache table
+                if taskUrlLog is None:
+                    pass
+                elif url in taskUrlLog:
+                    self.logger.info(f"Skipping {url} fromm retry cache because it was already present in task list")
+                    continue
+                taskList.append(
+                    connector.makeRequest(
+                        url = url,
+                        requestType = retryType,
+                        logger = self.logger,
+                        auth = auth,
+                        storage = storage,
+                        toRetry = self.toRetryList,
+                        companyNumber = companyNumber
+                    )
+                )
+            self.logger.info(f"Added {cntRetries} search entries to retry from cache")
+            # Clean local db retry table so that we don't spend time on it next time
+            if dbClean:
+                self.deleteRetryEntries(retryLinks)
+                self.logger.info("Cleaned retry entries from cache")
+            if taskUrlLog is not None:
+                del taskUrlLog
+            return None
+
+    @staticmethod
+    def parseOfficerData(officerJson) -> str:
+        """
+        Parses contents of officerList response
+        """
+        try:
+            officers = [f"{officer['officer_role']}: {officer['name']}" for officer in officerJson]
+            officerStr = ", ".join(officers)
+            return officerStr, None
+        except Exception as e:
+            return None, e
+
+    def parseOfficerEntries(self, officerStorageEntry) -> str:
+        """
+        Uses parseOfficerData to iteratively apply it to officerList resource
+        """
+        companyNumber = officerStorageEntry["officerStorageEntry"]
+        officerDataList = officerStorageEntry["data"]
+        fullOfficerData = []
+        for entry in officerDataList:
+            officerStr, err = self.parseOfficerData(entry)
+            if err is not None:
+                self.logger.error(f"Failed to parse officer data for {companyNumber}, output might be incomplete")
+            fullOfficerData.append(officerStr)
+        return companyNumber, ";"
+
+    
+    def tidyOfficerResults(self) -> pd.DataFrame:
+        """
+        Transforms list of officer dict to a dataframe that can be convenietly joined with other company data
+        """
+        outframe = pd.DataFrame(columns = ["company_number", "company_officer_names"])
+        for entry in self.officerStorage:
+            companyNumber = entry["companyNumber"]
+            officerListRaw = entry["data"]
+            for officerJson in officerListRaw:
+                officerInfo, err = self.parseOfficerData(officerJson = officerJson)
+                if err is not None:
+                    self.logger.error(f"Failed to parse officer data for {companyNumber}, output might be incomplete")
+
+
 
 
 
