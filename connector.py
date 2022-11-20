@@ -29,7 +29,6 @@ class Connector:
         async with self.limit:
             async with aiohttp.ClientSession() as session:
                 resp = await session.get(url = url, auth = auth, params = params)
-                #async with session.get(url = url, auth = auth, params = params) as resp:
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
                 if (status := resp.status) != 200:
@@ -55,10 +54,10 @@ class Connector:
                     if requestType == "officers":
                         storage.append({
                             "companyNumber": companyNumber,
-                            "data": dataJson["items"]
+                            "data": dataJson.get("items", None)
                         })
                     else:
-                        storage += dataJson["items"]
+                        storage += dataJson.get("items", None)
 
 #TO-DO: can this be implemented differently?
 async def makeRequests(urlList, rate, limit, auth, storage, paramList = None):
