@@ -46,6 +46,7 @@ searchMeta, err = utils.generateRunMetaData()
 #Create logger dir, TO-DO: check if error can be handled here
 utils.softDirCreate(LOG_FOLDER)
 #Configure logger
+#TO-DO: make a logging queue
 logging.basicConfig(
     level = logging.INFO,
     format = LOG_FORMAT,
@@ -92,7 +93,6 @@ searchParams, prepErr = sheetReader.prepareSeachInputs(sheetId = GSHEET_ID)
 if prepErr is not None:
     utils.logger.error(f"Search params preparation error: {prepErr}")
 utils.logger.info("Search inputs prepared")
-
 if len(sheetReader.leadFrame) > 0:
     #Override days back parameter for performing search if lead table has entries
     utils.checkMaxDate(sheetReader.leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
@@ -119,28 +119,36 @@ for day in searchDates:
         )
     )
 utils.logger.info("Prepared search request tasks")
-#Add seacrch retries from cache
-searchRetries = manager.getCachedRetries("search")
-#TO-DO: maybe keep it in a separate function?
-if len(searchRetries) > 0:
-    searchRetries = searchRetries["url"].values
-    for url in searchRetries:
-        searchTasks.append(
-            connector.makeRequest(
-                url = url,
-                requestType = "search",
-                logger = utils.logger,
-                auth = BasicAuth(REST_KEY, ""),
-                storage = manager.searchStorage,
-                toRetry = manager.toRetryList
-            )
-        )
-    manager.deleteRetryEntries(searchRetries)
-    utils.logger.info("Added search entries to retry from cache")
+err = manager.processRetryCache(
+    retryType = "search",
+    taskList = searchTasks,
+    connector = connector,
+    auth = BasicAuth(REST_KEY, ""),
+    dbClean = True
+)
+if err is not None:
+    utils.logger.error(f"Error processing search retries: {err}")
+# #Add seacrch retries from cache
+# searchRetries = manager.getCachedRetries("search")
+# #TO-DO: maybe keep it in a separate function?
+# if len(searchRetries) > 0:
+#     searchRetries = searchRetries["url"].values
+#     for url in searchRetries:
+#         searchTasks.append(
+#             connector.makeRequest(
+#                 url = url,
+#                 requestType = "search",
+#                 logger = utils.logger,
+#                 auth = BasicAuth(REST_KEY, ""),
+#                 storage = manager.searchStorage,
+#                 toRetry = manager.toRetryList
+#             )
+#         )
+#     manager.deleteRetryEntries(searchRetries)
+#     utils.logger.info("Added search entries to retry from cache")
 #Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(searchTasks))
-# loop.close()
 #Log search success
 utils.logger.info("Search completed. Saving to cache...")
 #Cache results and 429s to later retry
@@ -157,7 +165,7 @@ searchResults, tidyErr = manager.tidySearchResults(cachedAppend)
 print(searchResults)
 #CALL API for officers
 #Generate request tasks
-officerTasks = []
+officerTasks, officerTaskUrls = [], []
 for companyNumber in searchResults["company_number"]:
     officerUrl = f"{REST_URL}/company/{companyNumber}/officers"
     officerTasks.append(
@@ -167,18 +175,28 @@ for companyNumber in searchResults["company_number"]:
             logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             storage = manager.officerStorage,
-            toRetry = manager.toRetryList
+            toRetry = manager.toRetryList,
+            companyNumber = companyNumber
         )
     )
-#Split requests into chunks because windows cannot handle high volume task lists
+    officerTaskUrls.append(officerUrl)
+# Add officer retries
+err = manager.processRetryCache(
+    retryType = "search",
+    taskList = searchTasks,
+    connector = connector,
+    auth = BasicAuth(REST_KEY, ""),
+    dbClean = True,
+    taskUrlLog = officerTaskUrls
+)
+if err is not None:
+    utils.logger.error(f"Error processing officer retries: {err}")
 #TO-DO: maybe process officer tasks as a separate function?
 print(len(officerTasks))
 if IS_WINDOWS:
-    if len(officerTasks) > 60: #TO-DO make this a param?
-        officerTaskChunks = utils.splitToChunks(officerTasks, 60)
-    else:
-        officerTaskChunks = [officerTasks]
+    officerTaskChunks = utils.splitToChunks(officerTasks, 60) if len(officerTasks) > 60 else [officerTasks]
 utils.logger.info("Prepared tasks for officer requests")
+#TO-DO: maybe put the below to a function
 for chunk in officerTaskChunks:
     print("##################NEW CHUNK#####################")
     loop.run_until_complete(performTasks(chunk))
@@ -186,16 +204,13 @@ loop.close()
 #https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
 #Issue from the above
 utils.logger.info("Officer data collected")
+# Process officer data to get names only - already WIP in leadManager
+# Update handling retries for officer as we need company id there
 print(manager.officerStorage)
-#Check for officer retries
-#process officer data to get names only - maybe
-#Join data with searchResults
+# Join data with searchResults
 #Append to Gsheet: make sure that data to append is not duplicate
-#Repeat requests for 429s: START WITH THIS, should happen before we are working on cache! MB start run with it actually? A step in initial search?
-#Maybe append search and the re-read leads?
-#make retry a decorator? Just as a learning exercise
 #Clean Cache
-#Message to discord?
+#Message to discord? Can it be made a part of logging?
 #loop cleaning and closing
 
 
