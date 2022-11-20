@@ -1,0 +1,7 @@
+#TO-DO: Migrate ENV variables from .env here
+#TO-DO: make sure this is used in validation steps
+
+request_types:
+  search: "search"
+  officers: "officers"
+  company: "company"
