@@ -27,7 +27,6 @@ from constants import (
     CACHE_DB
 )
 from logging import handlers
-from customLogger import customLogger
 #Read platform - needed for windows-specific steps
 IS_WINDOWS = "win" in str(sys.platform).lower()
 #Read ENV variables - pass to a separrate function or file?
@@ -89,18 +88,26 @@ sheetReader = sheetManager(
 )
 utils.logger.info("Sheet Manager Instantiated")
 
-searchParams, prepErr = sheetReader.prepareSeachInputs(sheetId = GSHEET_ID)
-if prepErr is not None:
-    utils.logger.error(f"Search params preparation error: {prepErr}")
+searchParams = sheetReader.prepareSeachInputs(
+    sheetId = GSHEET_ID,
+    workSheetsToRead = [sheetReader.controlPanelSheetName, sheetReader.leadsSheetName]
+    )
+print(searchParams)
 utils.logger.info("Search inputs prepared")
-if len(sheetReader.leadFrame) > 0:
+leadFrame = getattr(sheetReader, f"{sheetReader.leadsSheetName}Frame")
+if len(leadFrame) > 0:
     #Override days back parameter for performing search if lead table has entries
-    utils.checkMaxDate(sheetReader.leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
+    utils.checkMaxDate(leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
 #filter dates for leads, then use getDaysDelta() to compute days_back
 searchDates = utils.createSearchDates(searchParams["days_back"])
 utils.logger.info("Generated search dates")
 #init connector
-connector = Connector(rate = RATE, limit = asyncio.Semaphore(LIMIT))
+connector = Connector(
+    rate = RATE,
+    limit = asyncio.Semaphore(LIMIT),
+    logger = utils.logger,
+    sessionStart = searchMeta["run_start_ts"]
+)
 utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio - base search
 searchTasks = []
@@ -111,7 +118,6 @@ for day in searchDates:
         connector.makeRequest(
             url = SEARCH_URL,
             requestType = "search",
-            logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             params = paramsCopy,
             storage = manager.searchStorage,
@@ -139,14 +145,16 @@ colsToSave, err = sheetReader.getColsToKeep()
 manager.cacheSearch(colsToSave, runMetaData = searchMeta)
 manager.cacheRetries("search")
 #Check what cache results needs to be appended to the sheet
+sheetLeadIds = leadFrame["company_number"].astype(str)
 cachedAppend = manager.getCachedToAppend(
-    existingIds = sheetReader.leadFrame[LEAD_SHEET_SCHEMA["companyNumber"]].values,
+    existingIds = sheetLeadIds,
     runMetaData = searchMeta
 )
 #Clean data before further processing
+sheetCompanyNumbers = sheetLeadIds
 searchResults, tidyErr = manager.tidySearchResults(
     cacheDf = cachedAppend,
-    sheetCompanyNumbers = list(sheetReader.leadFrame["company_number"].values)
+    sheetCompanyNumbers = sheetCompanyNumbers
     )
 #CALL API for officers
 #Generate request tasks, url task list is needed to avoid duplication
@@ -157,7 +165,6 @@ for companyNumber in searchResults["company_number"]:
         connector.makeRequest(
             url = officerUrl,
             requestType = "officers",
-            logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             storage = manager.officerStorage,
             toRetry = manager.toRetryList,
@@ -193,12 +200,13 @@ mergedData = pd.merge(searchResults, officersCleaned, on = "company_number", how
 #Align column order
 mergedData = mergedData[LEAD_SHEET_SCHEMA.values()]
 utils.logger.info("Sheet update prepared")
-sheetReader.appendToSheet(df = mergedData)
-utils.logger.info("New leads have been appended to sheet")
-# Figure out how to make semaphore work properly
+sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
+# Clean cache to avoid exta work during further runs
+manager.cleanCacheTable()
+# Figure out how to make semaphore work properly: it seems that counter is separate for each batch of officer requests. How do we unify it?
 # Merge connector and leadManager (inheritance)
-# Clean Cache + Retry
-#Message to discord? Can it be made a part of logging?
+# Message to discord? Can it be made a part of logging?
+# leadManager refactoring: make cache functions live in a separate object
 #loop cleaning and closing
 
 

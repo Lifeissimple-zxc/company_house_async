@@ -1,14 +1,17 @@
 import aiohttp
 import asyncio
 from logging import Logger
+from datetime import datetime
 
 class Connector:
     """
     Class for ratelimiting
     """
-    def __init__(self, rate: int, limit: asyncio.Semaphore):
+    def __init__(self, rate: int, limit: asyncio.Semaphore, logger: Logger, sessionStart: datetime):
         self.rate = rate
         self.limit = limit
+        self.logger = logger
+        self.sessionStart = sessionStart
 
     @staticmethod
     def cacheForRetry(url, requestType: str, companyNumber: str = None):
@@ -25,10 +28,21 @@ class Connector:
             "companyNumber": companyNumber
         }
 
+    def computeSleepTime(self, sessionStart: datetime, now: datetime, buffer: float = 1.5) -> int:
+        """
+        Computes how much time has passed since session start to estimate time to sleep to avoind getting 429
+        If now < sessionStars, returns rate attrbiute from self
+        """
+        if now >= sessionStart:
+            return self.rate - (now - sessionStart).seconds + buffer
+        else:
+            self.logger.warning("Now is less than session start, this is unexpected.")
+            return self.rate
+            
+
     async def makeRequest(
         self,
         requestType: str,
-        logger: Logger,
         url: str,
         auth: aiohttp.BasicAuth,
         storage: list,
@@ -43,25 +57,40 @@ class Connector:
             raise Exception(f"Wrong input for request task: {requestType}. Expected ('search', 'officers')")
         async with self.limit:
             async with aiohttp.ClientSession() as session:
+                print(self.limit._value)
                 resp = await session.get(url = url, auth = auth, params = params)
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
+
+                if self.limit.locked():
+                    #Make it a function?
+                    sleepTime = self.computeSleepTime(
+                        sessionStart = self.sessionStart,
+                        now = datetime.utcnow()
+                        )
+                    self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
+                    await asyncio.sleep(sleepTime)
+
                 if (status := resp.status) != 200:
-                    logger.warning(f"Got {status} for {rUrl}, sleeping for {self.rate} to retry")
-                    #Handle 429 separately
+                    # If we still get 429
                     if status == 429:
-                        await asyncio.sleep(self.rate)
+                        sleepTime = self.computeSleepTime(
+                            sessionStart = self.sessionStart,
+                            now = datetime.utcnow()
+                        )
+                        self.logger.warning(f"Got {status} for {rUrl}, sleeping for {sleepTime} to retry")
+                        await asyncio.sleep(sleepTime)
                         #Retry on the spot
                         retry = await session.get(
                             url = rUrl, auth = auth
                         )
                         if (retryStatus := retry.status) == 200:
-                            logger.info(f"Successful retry for {rUrl}")
+                            self.logger.info(f"Successful retry for {rUrl}")
                             dataJson  = await retry.json(content_type = None)
                         else:
-                            logger.warning(f"Got {retryStatus} for {rUrl} after retry")
+                            self.logger.warning(f"Got {retryStatus} for {rUrl} after retry")
                             if retryStatus == 429:
-                                logger.warning(f"Saving {rUrl} to retry cache")
+                                self.logger.warning(f"Saving {rUrl} to retry cache")
                                 self.cacheForRetry(
                                     url = rUrl,
                                     requestType = requestType,
@@ -69,7 +98,7 @@ class Connector:
                                 )
                 #Check if data JSON is none - log this
                 if dataJson is not None:
-                    logger.info(f"Saving valid response from {rUrl}")
+                    self.logger.info(f"Saving valid response from {rUrl}")
                     if requestType == "officers":
                         storage.append({
                             "companyNumber": companyNumber,

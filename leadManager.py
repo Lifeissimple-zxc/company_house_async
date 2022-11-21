@@ -150,7 +150,7 @@ class LeadManager:
                 """
             )
     
-    def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: list) -> tuple:
+    def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: pd.Series) -> tuple:
         """
         Merges processedSearch with cacheDf and cleans it
         """
@@ -249,16 +249,20 @@ class LeadManager:
             outframe = pd.concat([outframe, row], ignore_index = True)
         return outframe
 
-    def resetCacheTable(self):
-        # with dataset.connect(self.cache) as conn:
-        #     conn.query(
-        #         f"""
-        #         SELECT * FROM {self.cacheTable}
-        #         WHERE added_on_run_id <> :runId
-        #         AND company_number NOT IN {existingCompanies}
-        #         """, runId = runId
-        #     )
-        pass
+    def cleanCacheTable(self, cleanRetries = False):
+        """
+        Removes table from cache db
+        """
+        try:
+            with dataset.connect(self.cache) as conn:
+                conn.load_table(self.cacheTable).delete()
+                if cleanRetries:
+                    conn.load_table(self.rertyTable).delete()
+            self.logger.info(f"Cleaned cache!")
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to clean cache: {e}")
+            return e
 
 
 
