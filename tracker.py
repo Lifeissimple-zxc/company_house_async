@@ -92,7 +92,6 @@ searchParams = sheetReader.prepareSeachInputs(
     sheetId = GSHEET_ID,
     workSheetsToRead = [sheetReader.controlPanelSheetName, sheetReader.leadsSheetName]
     )
-print(searchParams)
 utils.logger.info("Search inputs prepared")
 leadFrame = getattr(sheetReader, f"{sheetReader.leadsSheetName}Frame")
 if len(leadFrame) > 0:
@@ -104,9 +103,9 @@ utils.logger.info("Generated search dates")
 #init connector
 connector = Connector(
     rate = RATE,
-    limit = asyncio.Semaphore(LIMIT),
+    limit = LIMIT,
     logger = utils.logger,
-    sessionStart = searchMeta["run_start_ts"]
+    sleepTimeBuffer = 2
 )
 utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio - base search
@@ -184,7 +183,6 @@ err = manager.processRetryCache(
 if err is not None:
     utils.logger.error(f"Error processing officer retries: {err}")
 #TO-DO: maybe process officer tasks as a separate function?
-print(len(officerTasks))
 if IS_WINDOWS:
     officerTaskChunks = utils.splitToChunks(officerTasks, 60) if len(officerTasks) > 60 else [officerTasks]
 utils.logger.info("Prepared tasks for officer requests")
@@ -204,6 +202,7 @@ sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
 # Clean cache to avoid exta work during further runs
 manager.cleanCacheTable()
 # Figure out how to make semaphore work properly: it seems that counter is separate for each batch of officer requests. How do we unify it?
+# Semaphore sleep time has to be calculated differently
 # Merge connector and leadManager (inheritance)
 # Message to discord? Can it be made a part of logging?
 # leadManager refactoring: make cache functions live in a separate object
