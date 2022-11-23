@@ -7,14 +7,18 @@ class Connector:
     """
     Class for ratelimiting
     """
-    def __init__(self, rate: int, limit: asyncio.Semaphore, logger: Logger, sessionStart: datetime):
+    def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
         self.rate = rate
         self.limit = limit
+        self.baseLimit = limit
         self.logger = logger
-        self.sessionStart = sessionStart
+        # Timing variable for rate limiting
+        self.checkpoint = datetime.utcnow()
+        # Buffer for rate limiting
+        self.sleepTimeBuffer = sleepTimeBuffer
 
     @staticmethod
-    def cacheForRetry(url, requestType: str, companyNumber: str = None):
+    def cacheForRetry(url, requestType: str, toRetryList: list, companyNumber: str = None):
         """
         Function for handling retry caching logic
         """
@@ -22,24 +26,63 @@ class Connector:
         #TO-DO: exceptions
         if companyNumber is None:
             companyNumber = ""
-        return {
+        toRetryList.append({
             "url": url,
             "requestType": requestType,
             "companyNumber": companyNumber
-        }
+        })
 
-    def computeSleepTime(self, sessionStart: datetime, now: datetime, buffer: float = 1.5) -> int:
+    def computeSleepTime(self) -> int:
         """
-        Computes how much time has passed since session start to estimate time to sleep to avoind getting 429
-        If now < sessionStars, returns rate attrbiute from self
+        Computes how much time has passed since last checkpoint.
+        Used to facilitate ratelimitting and handling 429
         """
-        if now >= sessionStart:
-            return self.rate - (now - sessionStart).seconds + buffer
+        # Compute needed sleeptime
+        currentTs = datetime.utcnow()
+        timeAfterCheckpoit = (currentTs - self.checkpoint).seconds
+        sleepTime = self.rate - timeAfterCheckpoit + self.sleepTimeBuffer
+        return int(sleepTime)
+
+    async def countRequest(self):
+        """
+        Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
+        """
+        # Check if we have tasks in the limit
+        print()
+        if self.limit >= int(self.baseLimit * 0.05):
+            # Consume if yes
+            self.limit -= 1
         else:
-            self.logger.warning("Now is less than session start, this is unexpected.")
-            return self.rate
-            
+            # Compute needed sleeptime
+            sleepTime = self.computeSleepTime()
+            # Log sleeping step
+            self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
+            await asyncio.sleep(sleepTime)
+            # Assign new checkpoint to self
+            self.checkpoint = datetime.utcnow()
+            # Refresh our limit capacity
+            self.limit = self.baseLimit
 
+    async def handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
+        """
+        Method to handle cases where we go over request limit and receive 429 from the API
+        """
+        if first:
+            sleepTime = self.computeSleepTime()
+            self.logger.warning(f"Got 429 for {url}, sleeping for {sleepTime} to retry")
+            await asyncio.sleep(sleepTime)
+            # Assign new checkpoint to self
+            self.checkpoint = datetime.utcnow()
+        # If we are hitting 429 more than once, there probably is no point in sleeping more :(
+        else:
+            self.logger.warning(f"Saving {url} to retry cache")
+            self.cacheForRetry(
+                url = url,
+                requestType = requestType,
+                companyNumber = companyNumber,
+                toRetryList = toRetryList
+            )
+    
     async def makeRequest(
         self,
         requestType: str,
@@ -55,46 +98,34 @@ class Connector:
         #TO-DO: error handling?
         if requestType not in ("search", "officers"):
             raise Exception(f"Wrong input for request task: {requestType}. Expected ('search', 'officers')")
-        async with self.limit:
-            async with aiohttp.ClientSession() as session:
-                print(self.limit._value)
+        async with aiohttp.ClientSession() as session:
+            try:
                 resp = await session.get(url = url, auth = auth, params = params)
+                print(self.limit)
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
-
-                if self.limit.locked():
-                    #Make it a function?
-                    sleepTime = self.computeSleepTime(
-                        sessionStart = self.sessionStart,
-                        now = datetime.utcnow()
-                        )
-                    self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
-                    await asyncio.sleep(sleepTime)
-
                 if (status := resp.status) != 200:
                     # If we still get 429
                     if status == 429:
-                        sleepTime = self.computeSleepTime(
-                            sessionStart = self.sessionStart,
-                            now = datetime.utcnow()
-                        )
-                        self.logger.warning(f"Got {status} for {rUrl}, sleeping for {sleepTime} to retry")
-                        await asyncio.sleep(sleepTime)
+                        await self.handleOverLimit(url = rUrl)
                         #Retry on the spot
                         retry = await session.get(
                             url = rUrl, auth = auth
                         )
+                        # Here I am repeating myself, maybe create a fancier get function?
+                        await self.countRequest()
                         if (retryStatus := retry.status) == 200:
                             self.logger.info(f"Successful retry for {rUrl}")
                             dataJson  = await retry.json(content_type = None)
                         else:
                             self.logger.warning(f"Got {retryStatus} for {rUrl} after retry")
                             if retryStatus == 429:
-                                self.logger.warning(f"Saving {rUrl} to retry cache")
-                                self.cacheForRetry(
+                                await self.handleOverLimit(
                                     url = rUrl,
                                     requestType = requestType,
-                                    companyNumber = companyNumber
+                                    companyNumber = companyNumber,
+                                    first = False,
+                                    toRetryList = toRetry
                                 )
                 #Check if data JSON is none - log this
                 if dataJson is not None:
@@ -106,6 +137,11 @@ class Connector:
                         })
                     else:
                         storage += dataJson.get("items", None)
+            except Exception as e:
+                self.logger.error(f"Got an error with {url}: {e}")
+            finally:
+                # Count our requests not to hit 429
+                await self.countRequest()
 
 #TO-DO: can this be implemented differently?
 async def makeRequests(urlList, rate, limit, auth, storage, paramList = None):
