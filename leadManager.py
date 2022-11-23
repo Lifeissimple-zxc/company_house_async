@@ -139,9 +139,7 @@ class LeadManager:
         Removes rows from retry cache
         """
         toDelete = [f"\'{url}\'" for url in urls]
-        print(toDelete)
         toDelete = f"({','.join(toDelete)})"
-        print(toDelete)
         with dataset.connect(self.cache) as conn:
             conn.query(
                 f"""
