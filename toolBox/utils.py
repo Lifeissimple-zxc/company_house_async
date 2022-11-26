@@ -76,7 +76,7 @@ class utilMaster:
             self.logger.error(f"Max date check error: {e}")
             return None
     
-    def readYaml(self, path: str) -> Union[dict, None]:
+    def readYaml(self, path: str) -> Union[dict, None]: #TBD if needed
         """
         Read Yaml to a dict, log if there is an error
         """

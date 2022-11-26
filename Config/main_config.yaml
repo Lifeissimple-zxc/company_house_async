@@ -1,0 +1,43 @@
+#TO-DO: Migrate ENV variables from .env here
+#TO-DO: make sure this is used in validation steps
+# Path to this file has to be in your .env
+# Gsheet
+gsheet:
+  #Secrets for gsheet are coming from env variables!
+  sheet_id: "1wfil9RrR3kBScpJpcv14qoVu8hK1eXnAEHzObK_3n7I"
+  benchmark_sheets: "controlPanel,leads"
+  tab_names:
+    leads: "leads"
+    control_panel: "controlPanel"
+  leadSheetColumns:
+    companyName: "company_name"
+    companyNumber: "company_number"
+    address: "address_string"
+    dateCreated: "date_of_creation"
+    companyType: "company_type"
+    sicCodes: "sic_codes_string"
+    runId: "added_on_run_id"
+    runTs: "added_run_ts"
+    officerNames: "company_officer_names"
+# API 
+companies_house:
+  base_url: "https://api.company-information.service.gov.uk"
+  search_url: "https://api.company-information.service.gov.uk/advanced-search/companies"
+  # We also store ratelimiting params here: https://developer-specs.company-information.service.gov.uk/guides/rateLimiting
+  rate: 300 # 300 is doc default
+  limit: 600 # 600 is doc default
+
+# Misc
+request_types:
+  search: "search"
+  officers: "officers"
+  #company: "company"
+
+# Logging
+logger:
+  file_name: "leadTracker.log"
+  folder: "Logs"
+  format:  "[%(asctime)s - %(levelname)s - %(funcName)s()]\t%(message)s"
+  timezone: "UTC"
+# Cache
+cache: "Config/cache.db"
