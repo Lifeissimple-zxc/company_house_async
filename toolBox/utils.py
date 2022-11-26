@@ -88,15 +88,12 @@ class utilMaster:
             self.logger.error(f"Yaml read error: {e}")
             return None
     
-    def generateRunMetaData(self) -> dict:
+    @staticmethod
+    def generateRunMetaData() -> dict:
         """
         Function that generates run uuid and its start time
         """
-        try:
-            return {"run_id": str(uuid4()), "run_start_ts": datetime.utcnow()}, None 
-        except Exception as e:
-            self.logger.error(f"Metadata generation error: {e}")
-            return None, e
+        return {"run_id": str(uuid4()), "run_start_ts": datetime.utcnow()}
 
     @staticmethod
     def splitToChunks(array: list, chunkSize: int) -> list:
