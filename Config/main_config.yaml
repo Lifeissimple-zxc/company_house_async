@@ -41,3 +41,7 @@ logger:
   timezone: "UTC"
 # Cache
 cache: "Config/cache.db"
+
+# Discord
+discord:
+  webhook: "https://discord.com/api/webhooks/1046178052788469831/4hoCUeXZ4y0-BYpt-H9w0A28RUQgsuXb0Lvg8Elj7-XtQVbtrQkUMA0HkhR_GA95cS5m"
