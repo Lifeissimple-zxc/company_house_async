@@ -8,13 +8,13 @@ from sys import exit
 from janitor import clean_names
 from attr import define
 from logging import Logger
-from customLogger import customLogger
 from typing import Union
+from pygsheets import PyGsheetsException
 
 class sheetManager:
     def __init__(
         self,
-        logger: Logger, #TO-DO: can we use a simple logger here?
+        logger: Logger,
         benchmarkSheets: list,
         controlPanelSheetName: str,
         leadsSheetName: str,
@@ -62,52 +62,50 @@ class sheetManager:
             sheetTitles = [ws.title for ws in self.spreadsheet.worksheets()]
             for sheet in self.benchmarkSheets:
                 if sheet not in sheetTitles:
-                    self.logger.warning(f"{sheet} is missing in {self.sheetId} document, reconfig needed!")
+                    self.logger.warning(f"{sheet} is missing in {self.spreadsheet.id} document, reconfig needed!")
                     return AttributeError("Spreadsheet does not have the needed configuration")
         except Exception as e:
             self.logger.error(f"Sheet validation error: {e}")
             return e
 
-    def readControlPanel(self):
-        try:
-            self.panelSheet = self.spreadsheet.worksheet_by_title(self.controlPanelSheetName)
-            self.controlPanelFrame = pd.DataFrame(self.panelSheet.get_as_df()).clean_names()
-        except Exception as e:
-            self.logger.error(f"Control panel reading error: {e}")
-            return e
-    
-   
-    def readLeadsTable(self):
-        try:
-            self.leadSheet = self.spreadsheet.worksheet_by_title(self.leadsSheetName)
-            self.leadFrame = pd.DataFrame(self.leadSheet.get_as_df()).clean_names()
-            #Remove rows from df that are fully empty
-            self.leadFrame.dropna(how = "all", inplace = True)
-            return None
-        except Exception as e:
-            self.logger.error(f"Reading leads table error: {e}")
-            return e
-
-    
-    def sheetToDf(self, workSheetName: str) -> tuple:
+    def readToDf(self, workSheetName: str, makeAttr = True):
         """
-        Read spreadsheet to pandas, a generic function
+        Reads sheet to a dataframe
         """
         try:
+            # Open worksheet
             worksheet = self.spreadsheet.worksheet_by_title(workSheetName)
-            return pd.DataFrame(worksheet.get_as_df().clean_names()), None
-        except Exception as e:
+        except PyGsheetsException as e:
             self.logger.error(f"{workSheetName} reading error: {e}")
-            return None, e
-
-    def parseSearchParams(self) -> Union[dict, None]:
+            return e
+        # Read to pandas
+        df = pd.DataFrame(worksheet.get_as_df().clean_names())
+        # Convert types, can be editted if needed, for now all goes to string
+        df.astype({col: "object" for col in  df.columns})
+        # Optinal block: attribute assignment
+        if makeAttr:
+            try:
+                # Save worksheet attribute
+                worksheetAttr = f"{workSheetName}Sheet"
+                setattr(self, worksheetAttr, worksheet)
+                # Save frame as an attribute
+                dfAttr = f"{workSheetName}Frame"
+                setattr(self, dfAttr, df)
+            except AttributeError as e:
+                self.logger.error(
+                    f"Failed to assign attributes for sheet {workSheetName}, details: {e}"
+                    )
+                return e
+        return None
+    
+    def parseSearchParams(self, controlPanelFrame: pd.DataFrame) -> Union[dict, None]:
         """
         Function to parse control panel search params to a dict
         """
         try:
             #Create base for 
             searchConfig = {"params": {}}
-            searchFrame = self.controlPanelFrame.query("purpose == 'search' and actual_input != ''")
+            searchFrame = controlPanelFrame.query("purpose == 'search' and actual_input != ''")
             for index, row in searchFrame.iterrows():
                 key = row["parameter"]
                 dataType = row["data_type"]
@@ -123,53 +121,57 @@ class sheetManager:
                 else:
                     searchConfig[key] = input
 
-            return searchConfig
+            return searchConfig, None
         except Exception as e:
             self.logger.error(f"Search params parsing error: {e}")
-            return None
+            return None, e
     
-    def getColsToKeep(self) -> list:
+    def getColsToKeep(self) -> list: #Do we actualy need this?
         """
         Reads columns to keep from searched data
         """
         try:
-            colsStr = self.controlPanelFrame.query("parameter == 'cols_to_keep'")["actual_input"].values[0]
+            searchFrame = getattr(self, f"{self.controlPanelSheetName}Frame")
+            colsStr = searchFrame.query("parameter == 'cols_to_keep'")["actual_input"].values[0]
             cols = colsStr.split(";\n")
             return cols, None
         except Exception as e:
             self.logger.error(f"Cols to keep reading error: {e}")
             return None, e
     
-    def prepareSeachInputs(self, sheetId: str, validation = True) -> tuple:
+    def prepareSeachInputs(self, sheetId: str, workSheetsToRead: list, validation = True) -> tuple:
         """
         Master function that establishes connection to the api and reads prepares input data for search step
         """
-        try:
-            #If statements to avoid unnecessary reconnections
-            if not hasattr(self, "client"):
-                self.connect()
-            if not hasattr(self, "spreadsheet"):
-                if sheetId is not None:
-                    self.openSheet(sheetId)
-            #Validate if needed
-            if validation:
-                self.validateSheet()
-            #Read sheets to DFs
-            self.readControlPanel()
-            self.readLeadsTable()
-            #Parse search params
-            return self.parseSearchParams(), None
-        except Exception as e:
-            return None, e
-
-    def appendToSheet(self, df: pd.DataFrame):
+        # If statements to avoid unnecessary reconnections
+        if not hasattr(self, "client"):
+            self.connect()
+        if not hasattr(self, "spreadsheet"):
+            if sheetId is not None:
+                self.openSheet(sheetId)
+        # Validate if needed
+        if validation:
+            self.validateSheet()
+        # Read sheets to DFs and assign to self
+        for ws in workSheetsToRead:
+            readErr = self.readToDf(ws)
+            if readErr is not None:
+                raise Exception("Failed to read needed sheets data, cannot proceed further :(")
+        # Parse search params
+        searchParams, prepErr = self.parseSearchParams(
+            getattr(self, f"{self.controlPanelSheetName}Frame")
+        )
+        if prepErr is not None:
+            self.logger.error(f"Preparing search inputs failed: {prepErr}")
+            raise prepErr
+        return searchParams
+    
+    def appendToSheet(self, sheetLeads: pd.Series, df: pd.DataFrame):
         """"
         Appends dataframe to the sheet
         """
-        leadRows = len(self.leadFrame) + 1
         df["added_run_ts"] = df["added_run_ts"].astype(str)
         rowsUpdate = df.values.tolist()
-        self.leadSheet.insert_rows(leadRows, number = len(df), values = rowsUpdate)
-        
-        pass
+        getattr(self, f"{self.leadsSheetName}Sheet").insert_rows(len(sheetLeads) + 1, number = len(df), values = rowsUpdate)
+        self.logger.info(f"{len(df)} new leads have been appended to the sheet")
 

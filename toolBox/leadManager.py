@@ -1,15 +1,161 @@
 import pandas as pd
 import dataset
+import aiohttp
+import asyncio
 from typing import Union
 from logging import Logger
-from connector import Connector
 from aiohttp import BasicAuth
+from datetime import datetime
 
-class LeadManager:
+# Connector class for ratelimited requests to the API
+class Connector:
+    """
+    Class for ratelimiting
+    """
+    def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
+        self.rate = rate
+        self.limit = limit
+        self.baseLimit = limit
+        self.logger = logger
+        # Timing variable for rate limiting
+        self.checkpoint = datetime.utcnow()
+        # Buffer for rate limiting
+        self.sleepTimeBuffer = sleepTimeBuffer
+
+    @staticmethod
+    def cacheForRetry(url, requestType: str, toRetryList: list, companyNumber: str = None):
+        """
+        Function for handling retry caching logic
+        """
+        assert requestType in ("search", "officers"), "Request type needs to be in (search, officers)"
+        #TO-DO: exceptions
+        if companyNumber is None:
+            companyNumber = ""
+        toRetryList.append({
+            "url": url,
+            "requestType": requestType,
+            "companyNumber": companyNumber
+        })
+
+    def computeSleepTime(self) -> int:
+        """
+        Computes how much time has passed since last checkpoint.
+        Used to facilitate ratelimitting and handling 429
+        """
+        # Compute needed sleeptime
+        currentTs = datetime.utcnow()
+        timeAfterCheckpoit = (currentTs - self.checkpoint).seconds
+        sleepTime = self.rate - timeAfterCheckpoit + self.sleepTimeBuffer
+        return int(sleepTime)
+
+    async def countRequest(self):
+        """
+        Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
+        """
+        # Check if we have tasks in the limit
+        print()
+        if self.limit >= int(self.baseLimit * 0.05):
+            # Consume if yes
+            self.limit -= 1
+        else:
+            # Compute needed sleeptime
+            sleepTime = self.computeSleepTime()
+            # Log sleeping step
+            self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
+            await asyncio.sleep(sleepTime)
+            # Assign new checkpoint to self
+            self.checkpoint = datetime.utcnow()
+            # Refresh our limit capacity
+            self.limit = self.baseLimit
+
+    async def handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
+        """
+        Method to handle cases where we go over request limit and receive 429 from the API
+        """
+        if first:
+            sleepTime = self.computeSleepTime()
+            self.logger.warning(f"Got 429 for {url}, sleeping for {sleepTime} to retry")
+            await asyncio.sleep(sleepTime)
+            # Assign new checkpoint to self
+            self.checkpoint = datetime.utcnow()
+        # If we are hitting 429 more than once, there probably is no point in sleeping more :(
+        else:
+            self.logger.warning(f"Saving {url} to retry cache")
+            self.cacheForRetry(
+                url = url,
+                requestType = requestType,
+                companyNumber = companyNumber,
+                toRetryList = toRetryList
+            )
+    
+    async def makeRequest(
+        self,
+        requestType: str,
+        url: str,
+        auth: aiohttp.BasicAuth,
+        storage: list,
+        toRetry: list,
+        params: dict = None,
+        companyNumber: str = None) -> None:
+        """
+        Async function for making http requests to company house API
+        """
+        #TO-DO: error handling?
+        if requestType not in ("search", "officers"):
+            raise Exception(f"Wrong input for request task: {requestType}. Expected ('search', 'officers')")
+        async with aiohttp.ClientSession() as session:
+            try:
+                resp = await session.get(url = url, auth = auth, params = params)
+                print(self.limit)
+                dataJson = await resp.json(content_type = None)
+                rUrl = resp.url
+                if (status := resp.status) != 200:
+                    # If we still get 429
+                    if status == 429:
+                        await self.handleOverLimit(url = rUrl)
+                        #Retry on the spot
+                        retry = await session.get(
+                            url = rUrl, auth = auth
+                        )
+                        # Here I am repeating myself, maybe create a fancier get function?
+                        await self.countRequest()
+                        if (retryStatus := retry.status) == 200:
+                            self.logger.info(f"Successful retry for {rUrl}")
+                            dataJson  = await retry.json(content_type = None)
+                        else:
+                            self.logger.warning(f"Got {retryStatus} for {rUrl} after retry")
+                            if retryStatus == 429:
+                                await self.handleOverLimit(
+                                    url = rUrl,
+                                    requestType = requestType,
+                                    companyNumber = companyNumber,
+                                    first = False,
+                                    toRetryList = toRetry
+                                )
+                #Check if data JSON is none - log this
+                if dataJson is not None:
+                    self.logger.info(f"Saving valid response from {rUrl}")
+                    if requestType == "officers":
+                        storage.append({
+                            "companyNumber": companyNumber,
+                            "data": dataJson.get("items", None)
+                        })
+                    else:
+                        storage += dataJson.get("items", None)
+            except Exception as e:
+                self.logger.error(f"Got an error with {url}: {e}")
+            finally:
+                # Count our requests not to hit 429
+                await self.countRequest()
+
+
+# Child object for having a 1 go-to entity for all lead operations
+class LeadManager(Connector):
     """
     Object for persisting parameters of lead searching and storing responses
     """
-    def __init__(self, cache: str, logger: Logger):
+    def __init__(self, cache: str, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
+        super().__init__(rate, limit, sleepTimeBuffer, logger)
         self.logger = logger
         self.searchStorage = []
         self.companyStorage = []
@@ -139,9 +285,7 @@ class LeadManager:
         Removes rows from retry cache
         """
         toDelete = [f"\'{url}\'" for url in urls]
-        print(toDelete)
         toDelete = f"({','.join(toDelete)})"
-        print(toDelete)
         with dataset.connect(self.cache) as conn:
             conn.query(
                 f"""
@@ -150,7 +294,7 @@ class LeadManager:
                 """
             )
     
-    def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: list) -> tuple:
+    def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: pd.Series) -> tuple:
         """
         Merges processedSearch with cacheDf and cleans it
         """
@@ -173,7 +317,6 @@ class LeadManager:
         self,
         retryType: str,
         taskList: list,
-        connector: Connector,
         auth: BasicAuth,
         dbClean = True,
         companyNumber: str = None,
@@ -202,7 +345,7 @@ class LeadManager:
                     self.logger.info(f"Skipping {url} fromm retry cache because it was already present in task list")
                     continue
                 taskList.append(
-                    connector.makeRequest(
+                    self.makeRequest(
                         url = url,
                         requestType = retryType,
                         logger = self.logger,
@@ -249,25 +392,17 @@ class LeadManager:
             outframe = pd.concat([outframe, row], ignore_index = True)
         return outframe
 
-    def resetCacheTable(self):
-        # with dataset.connect(self.cache) as conn:
-        #     conn.query(
-        #         f"""
-        #         SELECT * FROM {self.cacheTable}
-        #         WHERE added_on_run_id <> :runId
-        #         AND company_number NOT IN {existingCompanies}
-        #         """, runId = runId
-        #     )
-        pass
-
-
-
-
-
-
-
-
-
-        
-
-
+    def cleanCacheTable(self, cleanRetries = False):
+        """
+        Removes table from cache db
+        """
+        try:
+            with dataset.connect(self.cache) as conn:
+                conn.load_table(self.cacheTable).delete()
+                if cleanRetries:
+                    conn.load_table(self.rertyTable).delete()
+            self.logger.info(f"Cleaned cache!")
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to clean cache: {e}")
+            return e

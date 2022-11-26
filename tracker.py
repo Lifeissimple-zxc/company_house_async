@@ -1,52 +1,44 @@
 import asyncio
 import os
-import re
 import pandas as pd
-import json
 import logging
-import sys
 from uuid import uuid4
 from pytz import timezone
-from leadManager import LeadManager
-from utils import utilMaster
-from asyncUtils import performTasks
-from connector import Connector
 from dotenv import load_dotenv
 from aiohttp import BasicAuth
-from sheetManager import sheetManager
 from datetime import datetime as dt
-from constants import (
-    SEARCH_URL,
-    LIMIT,
-    RATE,
-    LOG_FORMAT,
-    LOG_FILE_NAME,
-    LOG_FOLDER,
-    TIMEZONE,
-    SHEET_SCHEMA_PATH,
-    CACHE_DB
-)
 from logging import handlers
-from customLogger import customLogger
-#Read platform - needed for windows-specific steps
-IS_WINDOWS = "win" in str(sys.platform).lower()
-#Read ENV variables - pass to a separrate function or file?
-load_dotenv()
-REST_URL = os.getenv("REST_BASE_URL")
-REST_KEY = os.getenv("REST_KEY")
-GSHEET_SECRET = json.loads(os.getenv("GSHEET_SECRET"))
-GSHEET_ID = os.environ.get("GSHEET_ID")
-BENCHMARK_SHEETNAMES = os.getenv("BENCHMARK_SHEETNAMES").split(",")
-GSHEET_CONTROL_PANEL_NAME = os.getenv("GSHEET_CONTROL_PANEL_NAME")
-GSHEET_LEAD_TABLE_NAME = os.getenv("GSHEET_LEAD_TABLE_NAME")
-#Instantiate utils class
+from toolBox.asyncUtils import performTasks
+from toolBox.leadManager import LeadManager
+from toolBox.sheetManager import sheetManager
+from toolBox.utils import utilMaster
+from toolBox import (
+    IS_WINDOWS,
+    REST_KEY,
+    REST_URL,
+    SEARCH_URL,
+    RATE,
+    LIMIT,
+    LEAD_SHEET_SCHEMA,
+    GSHEET_ID,
+    BENCHMARK_SHEETNAMES,
+    GSHEET_CONTROL_PANEL_NAME,
+    GSHEET_LEAD_TABLE_NAME,
+    LOG_FOLDER,
+    LOG_FILE_NAME,
+    LOG_FORMAT,
+    TIMEZONE,
+    CACHE
+)
+
+# Instantiate utils
 utils = utilMaster()
-#Generate search run metadata
-searchMeta, err = utils.generateRunMetaData()
-#Create logger dir, TO-DO: check if error can be handled here
-utils.softDirCreate(LOG_FOLDER)
+# Generate search run metadata
+searchMeta = utils.generateRunMetaData()
+# Create logger dir 
+err = utils.softDirCreate(LOG_FOLDER)
 #Configure logger
-#TO-DO: make a logging queue
+#TO-DO: make a logging queue, move to a sep file
 logging.basicConfig(
     level = logging.INFO,
     format = LOG_FORMAT,
@@ -59,25 +51,26 @@ logging.basicConfig(
         logging.StreamHandler() #this should write to console?
     ]
 )
-#Set logger timezone
+# Set logger timezone
 logging.Formatter.converter = lambda *args: dt.now(tz=timezone(TIMEZONE)).timetuple()
-#Perform logger assignment
+# Perform logger assignment
 utils.assignLogger(logging.getLogger("mainLogger"))
 utils.logger.info("##########################################################################\n")
 utils.logger.info(f"Run ID {searchMeta['run_id']} starts...")
 utils.logger.info("Instantiated logger and assigned it to utils instance")
-#Read YAML
-YAML_CONTENTS = utils.readYaml(SHEET_SCHEMA_PATH)
-if YAML_CONTENTS is None:
-    pass #TO-DO smth here if yaml is not read
-LEAD_SHEET_SCHEMA = YAML_CONTENTS["leadSheetColumns"]
 
 #Prepare to run async steps
 if IS_WINDOWS:
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
     utils.logger.info("Event policy set, this is a windows-specific step!")
 #Init lead manager
-manager = LeadManager(cache = CACHE_DB, logger = utils.logger)
+manager = LeadManager(
+    rate = RATE,
+    limit = LIMIT,
+    logger = utils.logger,
+    sleepTimeBuffer = 2,
+    cache = CACHE
+)
 utils.logger.info("Lead Manager Instantiated")
 
 #Read Spreadsheet Data
@@ -85,33 +78,31 @@ sheetReader = sheetManager(
     logger = utils.logger,
     benchmarkSheets = BENCHMARK_SHEETNAMES,
     controlPanelSheetName = GSHEET_CONTROL_PANEL_NAME,
-    leadsSheetName = GSHEET_LEAD_TABLE_NAME
+    leadsSheetName = GSHEET_LEAD_TABLE_NAME,
+    sheetSecretVarName = "GSHEET_SECRET"
 )
 utils.logger.info("Sheet Manager Instantiated")
-
-searchParams, prepErr = sheetReader.prepareSeachInputs(sheetId = GSHEET_ID)
-if prepErr is not None:
-    utils.logger.error(f"Search params preparation error: {prepErr}")
+searchParams = sheetReader.prepareSeachInputs(
+    sheetId = GSHEET_ID,
+    workSheetsToRead = [sheetReader.controlPanelSheetName, sheetReader.leadsSheetName]
+    )
 utils.logger.info("Search inputs prepared")
-if len(sheetReader.leadFrame) > 0:
+leadFrame = getattr(sheetReader, f"{sheetReader.leadsSheetName}Frame")
+if len(leadFrame) > 0:
     #Override days back parameter for performing search if lead table has entries
-    utils.checkMaxDate(sheetReader.leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
+    utils.checkMaxDate(leadFrame, LEAD_SHEET_SCHEMA["dateCreated"], searchParams)
 #filter dates for leads, then use getDaysDelta() to compute days_back
 searchDates = utils.createSearchDates(searchParams["days_back"])
 utils.logger.info("Generated search dates")
-#init connector
-connector = Connector(rate = RATE, limit = asyncio.Semaphore(LIMIT))
-utils.logger.info("Connector instantiated")
 #Generate Tasks for asyncio - base search
 searchTasks = []
 for day in searchDates:
     params = utils.createParams(headerBase = searchParams["params"], day = day)
     paramsCopy = params.copy()
     searchTasks.append(
-        connector.makeRequest(
+        manager.makeRequest(
             url = SEARCH_URL,
             requestType = "search",
-            logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             params = paramsCopy,
             storage = manager.searchStorage,
@@ -123,7 +114,6 @@ utils.logger.info("Prepared search request tasks")
 err = manager.processRetryCache(
     retryType = "search",
     taskList = searchTasks,
-    connector = connector,
     auth = BasicAuth(REST_KEY, ""),
     dbClean = True
 )
@@ -139,14 +129,16 @@ colsToSave, err = sheetReader.getColsToKeep()
 manager.cacheSearch(colsToSave, runMetaData = searchMeta)
 manager.cacheRetries("search")
 #Check what cache results needs to be appended to the sheet
+sheetLeadIds = leadFrame["company_number"].astype(str)
 cachedAppend = manager.getCachedToAppend(
-    existingIds = sheetReader.leadFrame[LEAD_SHEET_SCHEMA["companyNumber"]].values,
+    existingIds = sheetLeadIds,
     runMetaData = searchMeta
 )
 #Clean data before further processing
+sheetCompanyNumbers = sheetLeadIds
 searchResults, tidyErr = manager.tidySearchResults(
     cacheDf = cachedAppend,
-    sheetCompanyNumbers = list(sheetReader.leadFrame["company_number"].values)
+    sheetCompanyNumbers = sheetCompanyNumbers
     )
 #CALL API for officers
 #Generate request tasks, url task list is needed to avoid duplication
@@ -154,10 +146,9 @@ officerTasks, officerTaskUrls = [], []
 for companyNumber in searchResults["company_number"]:
     officerUrl = f"{REST_URL}/company/{companyNumber}/officers"
     officerTasks.append(
-        connector.makeRequest(
+        manager.makeRequest(
             url = officerUrl,
             requestType = "officers",
-            logger = utils.logger,
             auth = BasicAuth(REST_KEY, ""),
             storage = manager.officerStorage,
             toRetry = manager.toRetryList,
@@ -169,7 +160,6 @@ for companyNumber in searchResults["company_number"]:
 err = manager.processRetryCache(
     retryType = "search",
     taskList = searchTasks,
-    connector = connector,
     auth = BasicAuth(REST_KEY, ""),
     dbClean = True,
     taskUrlLog = officerTaskUrls
@@ -177,7 +167,6 @@ err = manager.processRetryCache(
 if err is not None:
     utils.logger.error(f"Error processing officer retries: {err}")
 #TO-DO: maybe process officer tasks as a separate function?
-print(len(officerTasks))
 if IS_WINDOWS:
     officerTaskChunks = utils.splitToChunks(officerTasks, 60) if len(officerTasks) > 60 else [officerTasks]
 utils.logger.info("Prepared tasks for officer requests")
@@ -193,15 +182,13 @@ mergedData = pd.merge(searchResults, officersCleaned, on = "company_number", how
 #Align column order
 mergedData = mergedData[LEAD_SHEET_SCHEMA.values()]
 utils.logger.info("Sheet update prepared")
-sheetReader.appendToSheet(df = mergedData)
-utils.logger.info("New leads have been appended to sheet")
-# Figure out how to make semaphore work properly
-# Merge connector and leadManager (inheritance)
-# Clean Cache + Retry
-#Message to discord? Can it be made a part of logging?
-#loop cleaning and closing
+sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
+# Clean cache to avoid exta work during further runs
+manager.cleanCacheTable()
+# Message to discord? Can it be made a part of logging?
+# Error catching and handling 
+# leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
+# loop cleaning and closing
+# Rate limiting is implemented, but in a hacky way: make it work better, but later
 
-
-
-#TO-DO check if cache has records that are not in sheet manager: append & clean cache, should be done at the beginning!
 
