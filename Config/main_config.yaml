@@ -9,7 +9,7 @@ gsheet:
   tab_names:
     leads: "leads"
     control_panel: "controlPanel"
-  leadSheetColumns:
+  lead_sheet_schema:
     companyName: "company_name"
     companyNumber: "company_number"
     address: "address_string"
