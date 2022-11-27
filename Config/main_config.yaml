@@ -39,8 +39,14 @@ logger:
   folder: "Logs"
   format:  "[%(asctime)s - %(levelname)s - %(funcName)s()]\t%(message)s"
   timezone: "UTC"
+  db: "Logs/logs.db"
+  db_table: "log_records"
+
 # Cache
-cache: "Config/cache.db"
+cache:
+  db: "Config/cache.db"
+  companies_table: "companies"
+  retries_table: "retries"
 
 # Discord
 discord:

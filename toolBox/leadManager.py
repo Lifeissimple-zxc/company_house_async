@@ -154,7 +154,16 @@ class LeadManager(Connector):
     """
     Object for persisting parameters of lead searching and storing responses
     """
-    def __init__(self, cache: str, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
+    def __init__(
+        self,
+        cache: str,
+        cacheTable: str,
+        retryTable: str,
+        rate: int,
+        limit: int,
+        sleepTimeBuffer: int,
+        logger: Logger) -> None:
+
         super().__init__(rate, limit, sleepTimeBuffer, logger)
         self.logger = logger
         self.searchStorage = []
@@ -162,8 +171,8 @@ class LeadManager(Connector):
         self.officerStorage = []
         self.toRetryList = []
         self.cache = f"sqlite:///{cache}"
-        self.cacheTable = "companies"
-        self.rertyTable = "retries"
+        self.cacheTable = cacheTable
+        self.rertyTable = retryTable
 
     @staticmethod
     def parseAddress(addressDict: dict) -> str:

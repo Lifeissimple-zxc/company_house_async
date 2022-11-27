@@ -35,6 +35,10 @@ _loggerConfig = CONFIG["logger"]
 LOG_FOLDER = _loggerConfig["folder"]
 LOG_FILE_NAME = _loggerConfig["file_name"]
 LOG_FORMAT = _loggerConfig["format"]
+LOG_DB = _loggerConfig["db"]
+LOG_DB_TABLE_NAME = _loggerConfig["db_table"]
 TIMEZONE = _loggerConfig["timezone"]
 
 CACHE = CONFIG["cache"]
+
+DISCORD_CONFIG = CONFIG["discord"]

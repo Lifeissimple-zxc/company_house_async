@@ -12,6 +12,9 @@ from toolBox.asyncUtils import performTasks
 from toolBox.leadManager import LeadManager
 from toolBox.sheetManager import sheetManager
 from toolBox.utils import utilMaster
+from toolBox.recordKeeper import (
+    dbHandler
+)
 from toolBox import (
     IS_WINDOWS,
     REST_KEY,
@@ -27,6 +30,8 @@ from toolBox import (
     LOG_FOLDER,
     LOG_FILE_NAME,
     LOG_FORMAT,
+    LOG_DB,
+    LOG_DB_TABLE_NAME,
     TIMEZONE,
     CACHE
 )
@@ -35,19 +40,18 @@ from toolBox import (
 utils = utilMaster()
 # Generate search run metadata
 searchMeta = utils.generateRunMetaData()
+RUN_ID = searchMeta["run_id"]
 # Create logger dir 
 err = utils.softDirCreate(LOG_FOLDER)
 #Configure logger
+# Configure our logging handlers
+dbLogHandler = dbHandler(db = LOG_DB, table = LOG_DB_TABLE_NAME, runId = RUN_ID)
 #TO-DO: make a logging queue, move to a sep file
 logging.basicConfig(
     level = logging.INFO,
     format = LOG_FORMAT,
     handlers = [
-        handlers.TimedRotatingFileHandler(
-            when = "midnight",
-            utc = True,
-            filename = os.path.join(LOG_FOLDER, LOG_FILE_NAME)
-        ),
+        dbLogHandler,
         logging.StreamHandler() #this should write to console?
     ]
 )
@@ -55,21 +59,22 @@ logging.basicConfig(
 logging.Formatter.converter = lambda *args: dt.now(tz=timezone(TIMEZONE)).timetuple()
 # Perform logger assignment
 utils.assignLogger(logging.getLogger("mainLogger"))
-utils.logger.info("##########################################################################\n")
 utils.logger.info(f"Run ID {searchMeta['run_id']} starts...")
 utils.logger.info("Instantiated logger and assigned it to utils instance")
 
-#Prepare to run async steps
+# Prepare to run async steps
 if IS_WINDOWS:
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
     utils.logger.info("Event policy set, this is a windows-specific step!")
-#Init lead manager
+# Init lead manager
 manager = LeadManager(
     rate = RATE,
     limit = LIMIT,
     logger = utils.logger,
     sleepTimeBuffer = 2,
-    cache = CACHE
+    cache = CACHE["db"],
+    cacheTable = CACHE["companies_table"],
+    retryTable = CACHE["retries_table"]
 )
 utils.logger.info("Lead Manager Instantiated")
 
