@@ -13,7 +13,8 @@ from toolBox.leadManager import LeadManager
 from toolBox.sheetManager import sheetManager
 from toolBox.utils import utilMaster
 from toolBox.recordKeeper import (
-    dbHandler
+    dbHandler,
+    discordHandler
 )
 from toolBox import (
     IS_WINDOWS,
@@ -33,9 +34,9 @@ from toolBox import (
     LOG_DB,
     LOG_DB_TABLE_NAME,
     TIMEZONE,
-    CACHE
+    CACHE,
+    DISCORD_CONFIG
 )
-
 # Instantiate utils
 utils = utilMaster()
 # Generate search run metadata
@@ -46,12 +47,19 @@ err = utils.softDirCreate(LOG_FOLDER)
 #Configure logger
 # Configure our logging handlers
 dbLogHandler = dbHandler(db = LOG_DB, table = LOG_DB_TABLE_NAME, runId = RUN_ID)
+discordLogHander = discordHandler(
+    webhook = DISCORD_CONFIG["webhook"],
+    poc1 = DISCORD_CONFIG["poc_1"],
+    poc2 = DISCORD_CONFIG["poc_2"],
+    runId = RUN_ID
+)
 #TO-DO: make a logging queue, move to a sep file
 logging.basicConfig(
     level = logging.INFO,
     format = LOG_FORMAT,
     handlers = [
         dbLogHandler,
+        discordLogHander,
         logging.StreamHandler() #this should write to console?
     ]
 )
@@ -195,5 +203,6 @@ manager.cleanCacheTable()
 # leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
 # loop cleaning and closing
 # Rate limiting is implemented, but in a hacky way: make it work better, but later
+# Error handling needs to be fixed, it is all over the place now
 
 

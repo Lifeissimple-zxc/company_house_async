@@ -1,4 +1,7 @@
 # Using simplequeue bc we do not need task tracking when doing logging
+import asyncio
+import aiohttp
+import requests
 import logging
 import dataset
 from datetime import datetime
@@ -71,9 +74,107 @@ class dbHandler(Handler):
         self.db.get_table(self.table).insert(row)
 
 class discordHandler(Handler):
-    # Continue from here
-    # Make sure that only warning and above gets  emitted
-    pass
+    """
+    Custom handler to send logs to Discord
+    """
+    def __init__(self, webhook: str, poc1: str, poc2: str, runId: str, maxChars: int = 2000) -> None:
+        # Inherit from parent class
+        super().__init__()
+        # Create session for requests
+        self.sesh = requests.session()
+        # Persisnt webhook within self
+        self.webhook = webhook
+        # Persist for enforcing character limit: https://discord.com/developers/docs/resources/webhook#execute-webhook
+        self.maxChars = maxChars
+        # Store useful attr within self
+        self.poc1 = poc1
+        self.poc2 = poc2
+        self.runId = runId
+        # Set level: we only want warning+ to go to discord
+        self.setLevel(logging.WARNING)
+    
+    @staticmethod
+    def _formatLevel(record: LogRecord, wrapperString = ":warning:") -> str:
+        """
+        Formats level of a message, based on https://docs.python.org/3/library/logging.html#logging-levels
+        """
+        recordLevel = record.levelname
+        # Add more warning signs depending on the level of the issue we are getting
+        if record.levelno == 30:
+            recordLevel = f"{wrapperString}recordLevel{wrapperString}"
+        elif record.levelno == 40:
+            recordLevel = f"{wrapperString * 2}recordLevel{wrapperString * 2}"
+        elif record.levelno == 50:
+            recordLevel = f"{wrapperString * 3}recordLevel{wrapperString * 3}"
+        else:
+            pass
+        
+        return recordLevel
+
+    def _truncateMessage(self, message: str) -> str:
+        """
+        Truncates message to fit in within the Discord character limit
+        """
+        message = message[:self.maxChars + 1]
+        return message
+
+    def _prepareMessage(self, record: LogRecord) -> str:
+        """
+        Method for preparing a discord message from the record object
+        """
+        # Get message attributes from the record
+        recordMessage = record.getMessage()
+        recordFunc = record.funcName
+        recordLevelFormatted = self._formatLevel(record)
+        # Compose final message
+        fullMessage = f"<@{self.poc1}>\n<@{self.poc2}>\nRun: {self.runId}.\n{recordLevelFormatted} IN {recordFunc}(). Details: {recordMessage}"
+        # Truncate message
+        fullMessage = self._truncateMessage(fullMessage)
+        
+        return fullMessage
+
+    def _prepareContents(self, record: LogRecord) -> dict:
+        """
+        Prepare content that can be sent to Discord Webhook
+        """
+        fullMessage = self._prepareMessage(record)
+
+        payload = {
+            "content": fullMessage
+        }
+
+        return payload
+
+    def sendToDiscord(self, record: LogRecord, retries: int = 3):
+        """
+        Uses other other methods as building blocks to send a log record to Discord as string
+        """
+        data = self._prepareContents(record)
+        print(data)
+
+        resp = self.sesh.post(url = self.webhook, data = data)
+        print("Hi from discord message", resp.text)
+        # Check if we want to retry
+        if 200 <= resp.status_code < 300:
+            return
+        for i in range(retries):
+            resp = self.sesh.post(url = self.webhook, data = data)
+            if 200 <= resp.status_code < 300:
+                break
+
+    def emit(self, record: LogRecord):
+        """
+        Calls async sendToDiscord to produce a discord message
+        """
+        self.sendToDiscord(record)
+
+#The above works in a sync fashion, try to make it async using top level api, then try lower levels
+            
+
+    
+
+        
+
 
 # Once discord handler is done --> work on configuring a queue for logger
     
