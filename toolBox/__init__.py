@@ -29,7 +29,7 @@ SEARCH_URL = _apiConfig["search_url"]
 RATE = _apiConfig["rate"]
 LIMIT = _apiConfig["limit"]
 
-REQUEST_TYPES = CONFIG["request_types"]
+REQUEST_TYPES = list(CONFIG["request_types"].values())
 
 _loggerConfig = CONFIG["logger"]
 LOG_FOLDER = _loggerConfig["folder"]
