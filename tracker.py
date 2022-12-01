@@ -1,5 +1,4 @@
 import asyncio
-import os
 import pandas as pd
 import logging
 from uuid import uuid4
@@ -29,13 +28,13 @@ from toolBox import (
     GSHEET_CONTROL_PANEL_NAME,
     GSHEET_LEAD_TABLE_NAME,
     LOG_FOLDER,
-    LOG_FILE_NAME,
     LOG_FORMAT,
     LOG_DB,
     LOG_DB_TABLE_NAME,
     TIMEZONE,
     CACHE,
-    DISCORD_CONFIG
+    DISCORD_CONFIG,
+    REQUEST_TYPES
 )
 # Instantiate utils
 utils = utilMaster()
@@ -82,7 +81,8 @@ manager = LeadManager(
     sleepTimeBuffer = 2,
     cache = CACHE["db"],
     cacheTable = CACHE["companies_table"],
-    retryTable = CACHE["retries_table"]
+    retryTable = CACHE["retries_table"],
+    allowedRequestTypes = REQUEST_TYPES
 )
 utils.logger.info("Lead Manager Instantiated")
 
@@ -95,10 +95,14 @@ sheetReader = sheetManager(
     sheetSecretVarName = "GSHEET_SECRET"
 )
 utils.logger.info("Sheet Manager Instantiated")
-searchParams = sheetReader.prepareSeachInputs(
+searchParams, e = sheetReader.prepareSeachInputs(
     sheetId = GSHEET_ID,
     workSheetsToRead = [sheetReader.controlPanelSheetName, sheetReader.leadsSheetName]
-    )
+)
+if e is not None:
+    utils.logger.error(f"Got and error when preparing search inputs: {e}")
+    exit()
+
 utils.logger.info("Search inputs prepared")
 leadFrame = getattr(sheetReader, f"{sheetReader.leadsSheetName}Frame")
 if len(leadFrame) > 0:
@@ -131,7 +135,7 @@ err = manager.processRetryCache(
     dbClean = True
 )
 if err is not None:
-    utils.logger.error(f"Error processing search retries: {err}")
+    utils.logger.warning(f"Error processing search retries: {err}")
 #Make search requests
 loop = asyncio.get_event_loop()
 loop.run_until_complete(performTasks(searchTasks))
@@ -139,22 +143,31 @@ loop.run_until_complete(performTasks(searchTasks))
 utils.logger.info("Search completed. Saving to cache...")
 #Cache results and 429s to later retry
 colsToSave, err = sheetReader.getColsToKeep()
+if err is not None:
+    utils.logger.error(f"Error getting columns to save: {err}")
+    exit()
+
 manager.cacheSearch(colsToSave, runMetaData = searchMeta)
-manager.cacheRetries("search")
-#Check what cache results needs to be appended to the sheet
+e = manager.cacheRetries("search")
+if e is not None:
+    utils.logger.warning(f"Erros with caching retries: {e}")
+    
+# Check what cache results needs to be appended to the sheet
 sheetLeadIds = leadFrame["company_number"].astype(str)
 cachedAppend = manager.getCachedToAppend(
     existingIds = sheetLeadIds,
     runMetaData = searchMeta
 )
-#Clean data before further processing
+
+# Clean data before further processing
 sheetCompanyNumbers = sheetLeadIds
-searchResults, tidyErr = manager.tidySearchResults(
-    cacheDf = cachedAppend,
-    sheetCompanyNumbers = sheetCompanyNumbers
-    )
-#CALL API for officers
-#Generate request tasks, url task list is needed to avoid duplication
+searchResults, e = manager.tidySearchResults(cacheDf = cachedAppend, sheetCompanyNumbers = sheetCompanyNumbers)
+if e is not None:
+    utils.logger.error(f"Error processing search results: {e}")
+    exit()
+
+# CALL API for officers
+# Generate request tasks, url task list is needed to avoid duplication
 officerTasks, officerTaskUrls = [], []
 for companyNumber in searchResults["company_number"]:
     officerUrl = f"{REST_URL}/company/{companyNumber}/officers"
@@ -178,17 +191,19 @@ err = manager.processRetryCache(
     taskUrlLog = officerTaskUrls
 )
 if err is not None:
-    utils.logger.error(f"Error processing officer retries: {err}")
+    # We warn that retries were not processed, but we do not stop the execution!
+    utils.logger.warning(f"Error processing officer retries: {err}")
 #TO-DO: maybe process officer tasks as a separate function?
 if IS_WINDOWS:
+    # https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
+    # The above is why we split to chunks!
     officerTaskChunks = utils.splitToChunks(officerTasks, 60) if len(officerTasks) > 60 else [officerTasks]
 utils.logger.info("Prepared tasks for officer requests")
-#TO-DO: maybe put the below to a function
+
 for chunk in officerTaskChunks:
     loop.run_until_complete(performTasks(chunk))
-loop.close() #TO-DO: move to another spot?
-#https://stackoverflow.com/questions/47675410/python-asyncio-aiohttp-valueerror-too-many-file-descriptors-in-select-on-win
-#Issue from the above
+loop.close()
+
 utils.logger.info("Officer data collected")
 officersCleaned = manager.tidyOfficerResults()
 mergedData = pd.merge(searchResults, officersCleaned, on = "company_number", how = "left")
@@ -197,7 +212,9 @@ mergedData = mergedData[LEAD_SHEET_SCHEMA.values()]
 utils.logger.info("Sheet update prepared")
 sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
 # Clean cache to avoid exta work during further runs
-manager.cleanCacheTable()
+e = manager.cleanCacheTable()
+if e is not None:
+    utils.logger.warning(f"Error cleaning cache table: {e}")
 # Message to discord? Can it be made a part of logging?
 # Error catching and handling 
 # leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
