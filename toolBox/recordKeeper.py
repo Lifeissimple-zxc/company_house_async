@@ -5,6 +5,8 @@ import requests
 import logging
 import dataset
 from datetime import datetime
+from retry import retry
+from requests import RequestException
 from queue import SimpleQueue as Queue
 from logging import (
     Handler,
@@ -101,11 +103,11 @@ class discordHandler(Handler):
         recordLevel = record.levelname
         # Add more warning signs depending on the level of the issue we are getting
         if record.levelno == 30:
-            recordLevel = f"{wrapperString}recordLevel{wrapperString}"
+            recordLevel = f"{wrapperString}{recordLevel}{wrapperString}"
         elif record.levelno == 40:
-            recordLevel = f"{wrapperString * 2}recordLevel{wrapperString * 2}"
+            recordLevel = f"{wrapperString * 2}{recordLevel}{wrapperString * 2}"
         elif record.levelno == 50:
-            recordLevel = f"{wrapperString * 3}recordLevel{wrapperString * 3}"
+            recordLevel = f"{wrapperString * 3}{recordLevel}{wrapperString * 3}"
         else:
             pass
         
@@ -144,23 +146,20 @@ class discordHandler(Handler):
         }
 
         return payload
-
+    
+    # Using retry decorator to force sending warnings and error to Discord
+    @retry(exceptions = RequestException, tries = 10, delay = 1, jitter = (1, 3))
     def sendToDiscord(self, record: LogRecord, retries: int = 3):
         """
         Uses other other methods as building blocks to send a log record to Discord as string
         """
         data = self._prepareContents(record)
-        print(data)
-
         resp = self.sesh.post(url = self.webhook, data = data)
-        print("Hi from discord message", resp.text)
         # Check if we want to retry
-        if 200 <= resp.status_code < 300:
-            return
-        for i in range(retries):
-            resp = self.sesh.post(url = self.webhook, data = data)
-            if 200 <= resp.status_code < 300:
-                break
+        if not 200 <= resp.status_code < 300:
+            print("Error sending logs to discord :(")
+            
+        
 
     def emit(self, record: LogRecord):
         """
@@ -168,7 +167,7 @@ class discordHandler(Handler):
         """
         self.sendToDiscord(record)
 
-#The above works in a sync fashion, try to make it async using top level api, then try lower levels
+#The above works in a sync fashion, try to make it async using top level api, then try lower levels, tbd if needed, we use queues for logging anyways
             
 
     
