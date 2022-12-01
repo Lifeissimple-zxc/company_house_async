@@ -6,29 +6,42 @@ from typing import Union
 from logging import Logger
 from aiohttp import BasicAuth
 from datetime import datetime
-
 # Connector class for ratelimited requests to the API
 class Connector:
     """
     Class for ratelimiting
     """
-    def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
+    def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger, allowedRequestTypes: list):
         self.rate = rate
         self.limit = limit
         self.baseLimit = limit
-        self.logger = logger
+        self.logger = logger,
+        self.allowedRequestTypes = allowedRequestTypes
         # Timing variable for rate limiting
         self.checkpoint = datetime.utcnow()
         # Buffer for rate limiting
         self.sleepTimeBuffer = sleepTimeBuffer
 
-    @staticmethod
-    def cacheForRetry(url, requestType: str, toRetryList: list, companyNumber: str = None):
+    def __validateRequestType(self, requestType: str):
+        """
+        Validates request type to be present within self
+        """
+        if requestType not in self.allowedRequestTypes:
+            return ValueError(f"Request type needs to be in {self.allowedRequestTypes}")
+        else:
+            return None
+
+    
+    def __cacheForRetry(self, url, requestType: str, toRetryList: list, companyNumber: str = None) -> Union[None, Exception]:
         """
         Function for handling retry caching logic
         """
-        assert requestType in ("search", "officers"), "Request type needs to be in (search, officers)"
-        #TO-DO: exceptions
+        # Validate that request type is one of the expected
+        e  = self.__validateRequestType(requestType)
+
+        if e is not None:
+            return e
+    
         if companyNumber is None:
             companyNumber = ""
         toRetryList.append({
@@ -37,7 +50,9 @@ class Connector:
             "companyNumber": companyNumber
         })
 
-    def computeSleepTime(self) -> int:
+
+
+    def __computeSleepTime(self) -> int:
         """
         Computes how much time has passed since last checkpoint.
         Used to facilitate ratelimitting and handling 429
@@ -48,18 +63,17 @@ class Connector:
         sleepTime = self.rate - timeAfterCheckpoit + self.sleepTimeBuffer
         return int(sleepTime)
 
-    async def countRequest(self):
+    async def __countRequest(self):
         """
         Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
         """
         # Check if we have tasks in the limit
-        print()
         if self.limit >= int(self.baseLimit * 0.05):
             # Consume if yes
             self.limit -= 1
         else:
             # Compute needed sleeptime
-            sleepTime = self.computeSleepTime()
+            sleepTime = self.__computeSleepTime()
             # Log sleeping step
             self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
             await asyncio.sleep(sleepTime)
@@ -68,12 +82,12 @@ class Connector:
             # Refresh our limit capacity
             self.limit = self.baseLimit
 
-    async def handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
+    async def __handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
         """
         Method to handle cases where we go over request limit and receive 429 from the API
         """
         if first:
-            sleepTime = self.computeSleepTime()
+            sleepTime = self.__computeSleepTime()
             self.logger.warning(f"Got 429 for {url}, sleeping for {sleepTime} to retry")
             await asyncio.sleep(sleepTime)
             # Assign new checkpoint to self
@@ -81,12 +95,15 @@ class Connector:
         # If we are hitting 429 more than once, there probably is no point in sleeping more :(
         else:
             self.logger.warning(f"Saving {url} to retry cache")
-            self.cacheForRetry(
+            e = self.__cacheForRetry(
                 url = url,
                 requestType = requestType,
                 companyNumber = companyNumber,
                 toRetryList = toRetryList
             )
+            
+            if e is not None:
+                self.logger.warning(f"Retry caching error: {e}")
     
     async def makeRequest(
         self,
@@ -100,9 +117,13 @@ class Connector:
         """
         Async function for making http requests to company house API
         """
-        #TO-DO: error handling?
-        if requestType not in ("search", "officers"):
-            raise Exception(f"Wrong input for request task: {requestType}. Expected ('search', 'officers')")
+        e = self.__validateRequestType(requestType)
+        # We stop the execution if we face an unexpected request type
+        if e is not None:
+            # Because we raise exception, logging also happens on the spot
+            self.logger.error(f"Cannot make request because of unexpected type {requestType}: {e}")
+            raise e
+        
         async with aiohttp.ClientSession() as session:
             try:
                 resp = await session.get(url = url, auth = auth, params = params)
@@ -112,20 +133,20 @@ class Connector:
                 if (status := resp.status) != 200:
                     # If we still get 429
                     if status == 429:
-                        await self.handleOverLimit(url = rUrl)
+                        await self.__handleOverLimit(url = rUrl)
                         #Retry on the spot
                         retry = await session.get(
                             url = rUrl, auth = auth
                         )
                         # Here I am repeating myself, maybe create a fancier get function?
-                        await self.countRequest()
+                        await self.__countRequest()
                         if (retryStatus := retry.status) == 200:
                             self.logger.info(f"Successful retry for {rUrl}")
                             dataJson  = await retry.json(content_type = None)
                         else:
                             self.logger.warning(f"Got {retryStatus} for {rUrl} after retry")
                             if retryStatus == 429:
-                                await self.handleOverLimit(
+                                await self.__handleOverLimit(
                                     url = rUrl,
                                     requestType = requestType,
                                     companyNumber = companyNumber,
@@ -143,10 +164,10 @@ class Connector:
                     else:
                         storage += dataJson.get("items", None)
             except Exception as e:
-                self.logger.error(f"Got an error with {url}: {e}")
+                self.logger.warning(f"Got an error with {url}: {e}")
             finally:
                 # Count our requests not to hit 429
-                await self.countRequest()
+                await self.__countRequest()
 
 
 # Child object for having a 1 go-to entity for all lead operations
@@ -154,32 +175,42 @@ class LeadManager(Connector):
     """
     Object for persisting parameters of lead searching and storing responses
     """
-    def __init__(self, cache: str, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger):
-        super().__init__(rate, limit, sleepTimeBuffer, logger)
+    def __init__(
+        self,
+        cache: str,
+        cacheTable: str,
+        retryTable: str,
+        rate: int,
+        limit: int,
+        sleepTimeBuffer: int,
+        logger: Logger,
+        allowedRequestTypes: list) -> None:
+
+        super().__init__(rate, limit, sleepTimeBuffer, logger, allowedRequestTypes)
         self.logger = logger
         self.searchStorage = []
         self.companyStorage = []
         self.officerStorage = []
         self.toRetryList = []
-        self.cache = f"sqlite:///{cache}"
-        self.cacheTable = "companies"
-        self.rertyTable = "retries"
+        self.cacheConn = dataset.connect(f"sqlite:///{cache}")
+        self.cacheTable = cacheTable
+        self.rertyTable = retryTable
 
     @staticmethod
-    def parseAddress(addressDict: dict) -> str:
+    def __parseAddress(addressDict: dict) -> str:
         """
         Parses company registered office address (dict) to string
         """
         return ", ".join(list(addressDict.values()))
 
     @staticmethod
-    def parseSic(sicCodeList: list) -> str:
+    def __parseSic(sicCodeList: list) -> str:
         """
         Converts list of sic codes to string
         """
         return ", ".join(sicCodeList)
     
-    def parseSearcResults(self, colsToSave: list, runMetaData: dict) -> pd.DataFrame:
+    def __parseSearcResults(self, colsToSave: list, runMetaData: dict) -> pd.DataFrame:
         """
         Iterates over search results (list of dicts) and resaves it as a dataframe
         """ 
@@ -187,8 +218,8 @@ class LeadManager(Connector):
         outframe = pd.DataFrame.from_records(self.searchStorage)
         outframe = outframe[colsToSave]
         #Apply transformations to complicated data structs in the dataframe
-        outframe["address_string"] = outframe["registered_office_address"].map(self.parseAddress)
-        outframe["sic_codes_string"] = outframe["sic_codes"].map(self.parseSic)
+        outframe["address_string"] = outframe["registered_office_address"].map(self.__parseAddress)
+        outframe["sic_codes_string"] = outframe["sic_codes"].map(self.__parseSic)
         #Store in self
         self.processedSearch = outframe
         self.processedSearch.drop(columns = ["registered_office_address", "sic_codes"], inplace = True)
@@ -201,24 +232,9 @@ class LeadManager(Connector):
         Writes parsed search results to db
         """
         #TO-DO: exceptions handling
-        self.parseSearcResults(colsToSave, runMetaData = runMetaData)
+        self.__parseSearcResults(colsToSave, runMetaData = runMetaData)
         records = self.processedSearch.to_dict(orient = "records")
-        with dataset.connect(self.cache) as conn:
-            conn[self.cacheTable].insert_many(records)
-    
-    def processRetries(self, retryType: str, companyNumber: str = None) -> tuple:
-        """
-        Processes list of retry urls to a list of dicts
-        Retry type is needed to correctly handle cash
-        """
-        if retryType not in ("search", "company", "officers"):
-            raise Exception("""Wrong value for retryType input, should be in ("search", "company", "search")""")
-        try:
-            if companyNumber is None:
-                companyNumber = ""
-            return [{"url": item, "type": retryType, "company_number": companyNumber} for item in self.toRetryList], None
-        except Exception as e:
-            return None, e
+        self.cacheConn[self.cacheTable].insert_many(records)
 
     def cacheRetries(self, retryType: str) -> Union[None, Exception]:
         """
@@ -231,14 +247,12 @@ class LeadManager(Connector):
                 self.logger.info("No retry URLs to cache :(")
                 return
 
-            with dataset.connect(self.cache) as conn:
-                conn[self.rertyTable].insert_many(self.toRetryList)
+            self.cacheConn[self.rertyTable].insert_many(self.toRetryList)
             self.logger.info(f"Wrote {retryCnt} to cache")
             #Clean list so that it could be re-used for different type of retries
             self.toRetryList = []
             
-        except Exception as e:
-            self.logger.error(f"Retries caching error: {e}")         
+        except Exception as e:   
             return e
 
     def getCachedToAppend(self, existingIds: list, runMetaData: dict):
@@ -248,14 +262,15 @@ class LeadManager(Connector):
         existingCompanies = [f"\'{item}\'" for item in existingIds]
         existingCompanies = f"({','.join(existingCompanies)})"
         runId = runMetaData["run_id"]
-        with dataset.connect(self.cache) as conn:
-            results = conn.query(
-                f"""
-                SELECT * FROM {self.cacheTable}
-                WHERE added_on_run_id <> :runId
-                AND company_number NOT IN {existingCompanies}
-                """, runId = runId
-            )
+
+        results = self.cacheConn.query(
+            f"""
+            SELECT * FROM {self.cacheTable}
+            WHERE added_on_run_id <> :runId
+            AND company_number NOT IN {existingCompanies}
+            """, runId = runId
+        )
+
         df = pd.DataFrame(results)
         try:
             df.drop(columns = ['id'], inplace = True)
@@ -264,35 +279,34 @@ class LeadManager(Connector):
         return df
         #TO-DO: Exceptions handling
     
-    def getCachedRetries(self, retryType: str):
+    def __getCachedRetries(self, retryType: str):
         """
         Selects entries from retries cache filtered by a given type to pandas
         """
         try:
-            with dataset.connect(self.cache) as conn:
-                results = conn.query(
-                    f"""
-                    SELECT url FROM retries
-                    WHERE type = :retryType
-                    """, retryType = retryType
-                )
+            results = self.cacheConn.query(
+                f"""
+                SELECT url FROM retries
+                WHERE type = :retryType
+                """, retryType = retryType
+            )
             return pd.DataFrame(results), None
         except Exception as e:
             return None, e
     
-    def deleteRetryEntries(self, urls: list):
+    def __deleteRetryEntries(self, urls: list):
         """
         Removes rows from retry cache
         """
         toDelete = [f"\'{url}\'" for url in urls]
         toDelete = f"({','.join(toDelete)})"
-        with dataset.connect(self.cache) as conn:
-            conn.query(
-                f"""
-                DELETE FROM {self.rertyTable}
-                WHERE url IN {toDelete}
-                """
-            )
+   
+        self.cacheConn.query(
+            f"""
+            DELETE FROM {self.rertyTable}
+            WHERE url IN {toDelete}
+            """
+        )
     
     def tidySearchResults(self, cacheDf: pd.DataFrame, sheetCompanyNumbers: pd.Series) -> tuple:
         """
@@ -310,7 +324,6 @@ class LeadManager(Connector):
             df.reset_index(inplace = True, drop = True)
             return df, None
         except Exception as e:
-            self.logger.error(f"Search & Cache cleaning faced error: {e}")
             return None, e
 
     def processRetryCache(
@@ -324,9 +337,8 @@ class LeadManager(Connector):
         """
         Queries urls for retrying from local DB and adds them to a list of tasks for Asyncio event loop
         """
-        retryFrame, err = self.getCachedRetries(retryType = retryType)
+        retryFrame, err = self.__getCachedRetries(retryType = retryType)
         if err is not None:
-            self.logger.error(f"Error when getting retry urls of {retryType} type: {err}")
             return err
         # Handle case where we have no retries to process
         if (cntRetries := len(retryFrame)) == 0:
@@ -358,14 +370,14 @@ class LeadManager(Connector):
             self.logger.info(f"Added {cntRetries} search entries to retry from cache")
             # Clean local db retry table so that we don't spend time on it next time
             if dbClean:
-                self.deleteRetryEntries(retryLinks)
+                self.__deleteRetryEntries(retryLinks)
                 self.logger.info("Cleaned retry entries from cache")
             if taskUrlLog is not None:
                 del taskUrlLog
             return None
 
     @staticmethod
-    def parseOfficerData(officerJson) -> str:
+    def __parseOfficerData(officerJson) -> str:
         """
         Parses contents of officerList response
         """
@@ -383,9 +395,9 @@ class LeadManager(Connector):
         outframe = pd.DataFrame(columns = ["company_number", "company_officer_names"])
         for entry in self.officerStorage:
             companyNumber = entry["companyNumber"]
-            officerData, err = self.parseOfficerData(entry["data"])
+            officerData, err = self.__parseOfficerData(entry["data"])
             if err is not None:
-                self.logger.error(f"Failed to parse officer data for company {companyNumber}. Data might be incomplete")
+                self.logger.warning(f"Failed to parse officer data for company {companyNumber}. Data might be incomplete")
             row = pd.DataFrame({
                 "company_number": [companyNumber],  "company_officer_names": [officerData]
             })
@@ -397,12 +409,10 @@ class LeadManager(Connector):
         Removes table from cache db
         """
         try:
-            with dataset.connect(self.cache) as conn:
-                conn.load_table(self.cacheTable).delete()
-                if cleanRetries:
-                    conn.load_table(self.rertyTable).delete()
-            self.logger.info(f"Cleaned cache!")
+            self.cacheConn.load_table(self.cacheTable).delete()
+            if cleanRetries:
+                self.cacheConn.load_table(self.rertyTable).delete()
+                self.logger.info(f"Cleaned cache!")
             return None
         except Exception as e:
-            self.logger.warning(f"Failed to clean cache: {e}")
             return e

@@ -39,5 +39,17 @@ logger:
   folder: "Logs"
   format:  "[%(asctime)s - %(levelname)s - %(funcName)s()]\t%(message)s"
   timezone: "UTC"
+  db: "Logs/logs.db"
+  db_table: "log_records"
+
 # Cache
-cache: "Config/cache.db"
+cache:
+  db: "Config/cache.db"
+  companies_table: "companies"
+  retries_table: "retries"
+
+# Discord
+discord:
+  webhook: "https://discord.com/api/webhooks/1046178052788469831/4hoCUeXZ4y0-BYpt-H9w0A28RUQgsuXb0Lvg8Elj7-XtQVbtrQkUMA0HkhR_GA95cS5m"
+  poc_1: "194543162604126208"
+  poc_2: ""
