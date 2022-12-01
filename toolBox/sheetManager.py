@@ -30,7 +30,7 @@ class sheetManager:
         self.scope = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
         self.sheetSecretVarName = sheetSecretVarName
     
-    def connect(self) -> Union[None, Exception]:
+    def _connect(self) -> Union[None, Exception]:
         """
         Inits a connection to the API
         """
@@ -38,23 +38,20 @@ class sheetManager:
             client = pygsheets.authorize(service_account_env_var = self.sheetSecretVarName)
             self.client = client
         except Exception as e:
-            self.logger.error(f"Api connection error: {e}")
             return e
 
     
-    def openSheet(self, sheetId: str) -> Union[None, Exception]:
+    def _openSheet(self, sheetId: str) -> Union[None, Exception]:
         """
         Open spreadsheet by ID
         """
         try:
             self.spreadsheet = self.client.open_by_key(sheetId)
         except Exception as e:
-            self.logger.error(f"Failed to open sheet with id {sheetId}: {e}")
-            #TO-DO: send notification
             return e
 
     
-    def validateSheet(self) -> Union[None, Exception]:
+    def _validateSheet(self) -> Union[None, Exception]:
         """
         Validates that the provided spreadsheet has all the needed tabs
         """
@@ -62,13 +59,11 @@ class sheetManager:
             sheetTitles = [ws.title for ws in self.spreadsheet.worksheets()]
             for sheet in self.benchmarkSheets:
                 if sheet not in sheetTitles:
-                    self.logger.warning(f"{sheet} is missing in {self.spreadsheet.id} document, reconfig needed!")
-                    return AttributeError("Spreadsheet does not have the needed configuration")
+                    return AttributeError(f"{sheet} is missing in {self.spreadsheet.id} document, reconfig needed!")
         except Exception as e:
-            self.logger.error(f"Sheet validation error: {e}")
             return e
 
-    def readToDf(self, workSheetName: str, makeAttr = True):
+    def _readToDf(self, workSheetName: str):
         """
         Reads sheet to a dataframe
         """
@@ -76,29 +71,25 @@ class sheetManager:
             # Open worksheet
             worksheet = self.spreadsheet.worksheet_by_title(workSheetName)
         except PyGsheetsException as e:
-            self.logger.error(f"{workSheetName} reading error: {e}")
             return e
         # Read to pandas
         df = pd.DataFrame(worksheet.get_as_df().clean_names())
         # Convert types, can be editted if needed, for now all goes to string
         df.astype({col: "object" for col in  df.columns})
         # Optinal block: attribute assignment
-        if makeAttr:
-            try:
-                # Save worksheet attribute
-                worksheetAttr = f"{workSheetName}Sheet"
-                setattr(self, worksheetAttr, worksheet)
-                # Save frame as an attribute
-                dfAttr = f"{workSheetName}Frame"
-                setattr(self, dfAttr, df)
-            except AttributeError as e:
-                self.logger.error(
-                    f"Failed to assign attributes for sheet {workSheetName}, details: {e}"
-                    )
-                return e
+        try:
+            # Save worksheet attribute
+            worksheetAttr = f"{workSheetName}Sheet"
+            setattr(self, worksheetAttr, worksheet)
+            # Save frame as an attribute
+            dfAttr = f"{workSheetName}Frame"
+            setattr(self, dfAttr, df)
+        except AttributeError as e:
+            return e
+
         return None
     
-    def parseSearchParams(self, controlPanelFrame: pd.DataFrame) -> Union[dict, None]:
+    def _parseSearchParams(self, controlPanelFrame: pd.DataFrame) -> Union[dict, None]:
         """
         Function to parse control panel search params to a dict
         """
@@ -123,7 +114,6 @@ class sheetManager:
 
             return searchConfig, None
         except Exception as e:
-            self.logger.error(f"Search params parsing error: {e}")
             return None, e
     
     def getColsToKeep(self) -> list: #Do we actualy need this?
@@ -136,7 +126,6 @@ class sheetManager:
             cols = colsStr.split(";\n")
             return cols, None
         except Exception as e:
-            self.logger.error(f"Cols to keep reading error: {e}")
             return None, e
     
     def prepareSeachInputs(self, sheetId: str, workSheetsToRead: list, validation = True) -> tuple:
@@ -145,26 +134,35 @@ class sheetManager:
         """
         # If statements to avoid unnecessary reconnections
         if not hasattr(self, "client"):
-            self.connect()
+            e = self._connect()
+            if e is not None:
+                return None, e
+
         if not hasattr(self, "spreadsheet"):
-            if sheetId is not None:
-                self.openSheet(sheetId)
+            e = self._openSheet(sheetId)
+            if e is not None:
+                return None, e
+        
         # Validate if needed
         if validation:
-            self.validateSheet()
+            e = self._validateSheet()
+            if e is not None:
+                return None, e
+
         # Read sheets to DFs and assign to self
         for ws in workSheetsToRead:
-            readErr = self.readToDf(ws)
-            if readErr is not None:
-                raise Exception("Failed to read needed sheets data, cannot proceed further :(")
+            e = self._readToDf(ws)
+            if e is not None:
+                return None, e
+
         # Parse search params
-        searchParams, prepErr = self.parseSearchParams(
+        searchParams, e = self._parseSearchParams(
             getattr(self, f"{self.controlPanelSheetName}Frame")
         )
-        if prepErr is not None:
-            self.logger.error(f"Preparing search inputs failed: {prepErr}")
-            raise prepErr
-        return searchParams
+        if e is not None:
+            return None, e
+
+        return searchParams, None
     
     def appendToSheet(self, sheetLeads: pd.Series, df: pd.DataFrame):
         """"
