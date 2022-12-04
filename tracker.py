@@ -1,20 +1,17 @@
 import asyncio
 import pandas as pd
 import logging
-from uuid import uuid4
+from queue import Queue
 from pytz import timezone
-from dotenv import load_dotenv
 from aiohttp import BasicAuth
 from datetime import datetime as dt
 from logging import handlers
+from time import sleep
 from toolBox.asyncUtils import performTasks
 from toolBox.leadManager import LeadManager
 from toolBox.sheetManager import sheetManager
 from toolBox.utils import utilMaster
-from toolBox.recordKeeper import (
-    dbHandler,
-    discordHandler
-)
+from toolBox.recordKeeper import dbHandler, discordHandler
 from toolBox import (
     IS_WINDOWS,
     REST_KEY,
@@ -39,11 +36,14 @@ from toolBox import (
 # Instantiate utils
 utils = utilMaster()
 # Generate search run metadata
-searchMeta = utils.generateRunMetaData()
+searchMeta = utils.generateRunMetaData(REQUEST_TYPES)
 RUN_ID = searchMeta["run_id"]
 # Create logger dir 
 err = utils.softDirCreate(LOG_FOLDER)
 #Configure logger
+# First we get a queue for logging and its handlers
+logQueue = Queue()
+queueHanlder = handlers.QueueHandler(logQueue)
 # Configure our logging handlers
 dbLogHandler = dbHandler(db = LOG_DB, table = LOG_DB_TABLE_NAME, runId = RUN_ID)
 discordLogHander = discordHandler(
@@ -52,23 +52,30 @@ discordLogHander = discordHandler(
     poc2 = DISCORD_CONFIG["poc_2"],
     runId = RUN_ID
 )
+# Configure queue listener, we put our DB hanlder there
+qListener = handlers.QueueListener(
+    logQueue,
+    dbLogHandler
+)
+# Start our logging queue
+qListener.start()
 #TO-DO: make a logging queue, move to a sep file
 logging.basicConfig(
     level = logging.INFO,
     format = LOG_FORMAT,
     handlers = [
-        dbLogHandler,
+        queueHanlder,
         discordLogHander,
         logging.StreamHandler() #this should write to console?
     ]
 )
 # Set logger timezone
 logging.Formatter.converter = lambda *args: dt.now(tz=timezone(TIMEZONE)).timetuple()
+
 # Perform logger assignment
 utils.assignLogger(logging.getLogger("mainLogger"))
 utils.logger.info(f"Run ID {searchMeta['run_id']} starts...")
 utils.logger.info("Instantiated logger and assigned it to utils instance")
-
 # Prepare to run async steps
 if IS_WINDOWS:
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) #windows-specific thing!
@@ -123,7 +130,8 @@ for day in searchDates:
             auth = BasicAuth(REST_KEY, ""),
             params = paramsCopy,
             storage = manager.searchStorage,
-            toRetry = manager.toRetryList
+            toRetry = manager.toRetryList,
+            metaData = searchMeta
         )
     )
 utils.logger.info("Prepared search request tasks")
@@ -132,7 +140,8 @@ err = manager.processRetryCache(
     retryType = "search",
     taskList = searchTasks,
     auth = BasicAuth(REST_KEY, ""),
-    dbClean = True
+    dbClean = True,
+    metaData = searchMeta
 )
 if err is not None:
     utils.logger.warning(f"Error processing search retries: {err}")
@@ -178,7 +187,8 @@ for companyNumber in searchResults["company_number"]:
             auth = BasicAuth(REST_KEY, ""),
             storage = manager.officerStorage,
             toRetry = manager.toRetryList,
-            companyNumber = companyNumber
+            companyNumber = companyNumber,
+            metaData = searchMeta
         )
     )
     officerTaskUrls.append(officerUrl)
@@ -188,7 +198,8 @@ err = manager.processRetryCache(
     taskList = searchTasks,
     auth = BasicAuth(REST_KEY, ""),
     dbClean = True,
-    taskUrlLog = officerTaskUrls
+    taskUrlLog = officerTaskUrls,
+    metaData = searchMeta
 )
 if err is not None:
     # We warn that retries were not processed, but we do not stop the execution!
@@ -202,12 +213,11 @@ utils.logger.info("Prepared tasks for officer requests")
 
 for chunk in officerTaskChunks:
     loop.run_until_complete(performTasks(chunk))
-loop.close()
 
 utils.logger.info("Officer data collected")
 officersCleaned = manager.tidyOfficerResults()
 mergedData = pd.merge(searchResults, officersCleaned, on = "company_number", how = "left")
-#Align column order
+# Align column order
 mergedData = mergedData[LEAD_SHEET_SCHEMA.values()]
 utils.logger.info("Sheet update prepared")
 sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
@@ -215,8 +225,14 @@ sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
 e = manager.cleanCacheTable()
 if e is not None:
     utils.logger.warning(f"Error cleaning cache table: {e}")
-# Logging queues
-# leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
-# loop cleaning and closing
+# Calculate runtime
+runtimeStats = utils.getRunTimeStats(searchMeta)
+runtimeStats["new_leads"] = len(mergedData)
+print(runtimeStats) # this should be logged to m3 or some other observability tool!
+# Cleanup of queue listener and event loop
+loop.close()
+sleep(3)
+qListener.stop()
+#summary stats of the run: runtime, calls to different services, new leads
 
 

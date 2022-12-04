@@ -1,27 +1,13 @@
 # Using simplequeue bc we do not need task tracking when doing logging
-import asyncio
-import aiohttp
 import requests
 import logging
 import dataset
 from datetime import datetime
 from retry import retry
 from requests import RequestException
-from queue import SimpleQueue as Queue
 from logging import (
     Handler,
-    StreamHandler,
     LogRecord
-)
-from logging.handlers import (
-    QueueHandler,
-    QueueListener,
-    RotatingFileHandler,
-    TimedRotatingFileHandler
-)
-from toolBox import (
-    LOG_DB,
-    LOG_DB_TABLE_NAME
 )
 
 # handler for async: https://stackoverflow.com/questions/45842926/python-asynchronous-logging
@@ -29,8 +15,6 @@ from toolBox import (
 # Different handlders for different levels: https://medium.com/nerd-for-tech/logging-with-logging-in-python-d3d8eb9a155a
 # Inspiration for discord handler: https://pypi.org/project/python-logging-discord-handler/
 # Discord markdown doc: https://support.discord.com/hc/en-us/articles/210298617-Markdown-Text-101-Chat-Formatting-Bold-Italic-Underline-
-#Set queue for async code
-#Write handler for discord - this first!
 
 class dbHandler(Handler):
     """
@@ -66,7 +50,7 @@ class dbHandler(Handler):
         )
         return row
     
-    def emit(self, record):
+    def handle(self, record):
         """
         Reads record instance to a dict and writes this dict to db
         """
@@ -161,7 +145,7 @@ class discordHandler(Handler):
             
         
 
-    def emit(self, record: LogRecord):
+    def handle(self, record: LogRecord):
         """
         Calls async sendToDiscord to produce a discord message
         """
