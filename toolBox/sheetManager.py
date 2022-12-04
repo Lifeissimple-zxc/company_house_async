@@ -1,13 +1,7 @@
 import pandas as pd
 import pygsheets
-from oauth2client.service_account import ServiceAccountCredentials
-import json
-from dotenv import load_dotenv
-import os
-from sys import exit
-from janitor import clean_names
-from attr import define
 from logging import Logger
+from janitor import clean_names #This is used within pandas, not alone
 from typing import Union
 from pygsheets import PyGsheetsException
 
@@ -164,11 +158,15 @@ class sheetManager:
 
         return searchParams, None
     
-    def appendToSheet(self, sheetLeads: pd.Series, df: pd.DataFrame):
+    def appendToSheet(self, sheetLeads: pd.Series, df: pd.DataFrame) -> None:
         """"
         Appends dataframe to the sheet
         """
         df["added_run_ts"] = df["added_run_ts"].astype(str)
+        df["date_of_creation"] = pd.to_datetime(df["date_of_creation"])
+        # Sort by created for convenience
+        df.sort_values(by = "date_of_creation", ascending = True, inplace = True)
+        df["date_of_creation"] = df["date_of_creation"].astype(str)
         rowsUpdate = df.values.tolist()
         getattr(self, f"{self.leadsSheetName}Sheet").insert_rows(len(sheetLeads) + 1, number = len(df), values = rowsUpdate)
         self.logger.info(f"{len(df)} new leads have been appended to the sheet")

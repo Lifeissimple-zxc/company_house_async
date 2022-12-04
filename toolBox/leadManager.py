@@ -13,9 +13,9 @@ class Connector:
     """
     def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger, allowedRequestTypes: list):
         self.rate = rate
-        self.limit = limit
+        self.limit = asyncio.Semaphore(limit)
         self.baseLimit = limit
-        self.logger = logger,
+        self.logger = logger
         self.allowedRequestTypes = allowedRequestTypes
         # Timing variable for rate limiting
         self.checkpoint = datetime.utcnow()
@@ -68,9 +68,10 @@ class Connector:
         Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
         """
         # Check if we have tasks in the limit
-        if self.limit >= int(self.baseLimit * 0.05):
+        if self.limit._value >= int(self.baseLimit * 0.05): # This is a bit hacky, but works
             # Consume if yes
-            self.limit -= 1
+            #self.limit -= 1
+            await self.limit.acquire()
         else:
             # Compute needed sleeptime
             sleepTime = self.__computeSleepTime()
@@ -80,7 +81,7 @@ class Connector:
             # Assign new checkpoint to self
             self.checkpoint = datetime.utcnow()
             # Refresh our limit capacity
-            self.limit = self.baseLimit
+            self.limit = asyncio.Semaphore(self.baseLimit)
 
     async def __handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
         """
@@ -105,6 +106,18 @@ class Connector:
             if e is not None:
                 self.logger.warning(f"Retry caching error: {e}")
     
+    def __gatherRequestStats(self, metaData: dict, requestType: str, respStatus: int) -> Union[None, KeyError]:
+        """
+        Stores data on responses in metaData dict. Mostly needed for runtime summary stats
+        """
+        try:
+            if 200<= respStatus < 300:
+                metaData[requestType]["success"].append(1)
+            else:
+                metaData[requestType]["rest"].append(1)
+        except KeyError as e:
+            self.logger.warning(f"Error when saving response to metadata dict: {e}")
+    
     async def makeRequest(
         self,
         requestType: str,
@@ -112,6 +125,7 @@ class Connector:
         auth: aiohttp.BasicAuth,
         storage: list,
         toRetry: list,
+        metaData: dict,
         params: dict = None,
         companyNumber: str = None) -> None:
         """
@@ -126,20 +140,22 @@ class Connector:
         
         async with aiohttp.ClientSession() as session:
             try:
+                await self.__countRequest()
                 resp = await session.get(url = url, auth = auth, params = params)
-                print(self.limit)
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
+                # Save resp status to metadata dict
+                self.__gatherRequestStats(metaData, requestType, resp.status)
                 if (status := resp.status) != 200:
                     # If we still get 429
                     if status == 429:
                         await self.__handleOverLimit(url = rUrl)
                         #Retry on the spot
-                        retry = await session.get(
-                            url = rUrl, auth = auth
-                        )
+                        retry = await session.get(url = rUrl, auth = auth)
                         # Here I am repeating myself, maybe create a fancier get function?
                         await self.__countRequest()
+                        # Save resp status to metadata dict
+                        self.__gatherRequestStats(metaData, requestType, retry.status)
                         if (retryStatus := retry.status) == 200:
                             self.logger.info(f"Successful retry for {rUrl}")
                             dataJson  = await retry.json(content_type = None)
@@ -165,9 +181,6 @@ class Connector:
                         storage += dataJson.get("items", None)
             except Exception as e:
                 self.logger.warning(f"Got an error with {url}: {e}")
-            finally:
-                # Count our requests not to hit 429
-                await self.__countRequest()
 
 
 # Child object for having a 1 go-to entity for all lead operations
@@ -331,6 +344,7 @@ class LeadManager(Connector):
         retryType: str,
         taskList: list,
         auth: BasicAuth,
+        metaData: dict,
         dbClean = True,
         companyNumber: str = None,
         taskUrlLog: list = None) -> Union[None, Exception]:
@@ -364,7 +378,8 @@ class LeadManager(Connector):
                         auth = auth,
                         storage = storage,
                         toRetry = self.toRetryList,
-                        companyNumber = companyNumber
+                        companyNumber = companyNumber,
+                        metaData = metaData
                     )
                 )
             self.logger.info(f"Added {cntRetries} search entries to retry from cache")
@@ -416,3 +431,4 @@ class LeadManager(Connector):
             return None
         except Exception as e:
             return e
+    
