@@ -13,9 +13,9 @@ class Connector:
     """
     def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger, allowedRequestTypes: list):
         self.rate = rate
-        self.limit = limit
+        self.limit = asyncio.Semaphore(limit)
         self.baseLimit = limit
-        self.logger = logger,
+        self.logger = logger
         self.allowedRequestTypes = allowedRequestTypes
         # Timing variable for rate limiting
         self.checkpoint = datetime.utcnow()
@@ -68,9 +68,10 @@ class Connector:
         Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
         """
         # Check if we have tasks in the limit
-        if self.limit >= int(self.baseLimit * 0.05):
+        if self.limit._value >= int(self.baseLimit * 0.05): # This is a bit hacky, but works
             # Consume if yes
-            self.limit -= 1
+            #self.limit -= 1
+            await self.limit.acquire()
         else:
             # Compute needed sleeptime
             sleepTime = self.__computeSleepTime()
@@ -80,7 +81,7 @@ class Connector:
             # Assign new checkpoint to self
             self.checkpoint = datetime.utcnow()
             # Refresh our limit capacity
-            self.limit = self.baseLimit
+            self.limit = asyncio.Semaphore(self.baseLimit)
 
     async def __handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
         """
@@ -126,8 +127,8 @@ class Connector:
         
         async with aiohttp.ClientSession() as session:
             try:
+                await self.__countRequest()
                 resp = await session.get(url = url, auth = auth, params = params)
-                print(self.limit)
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
                 if (status := resp.status) != 200:
@@ -165,9 +166,6 @@ class Connector:
                         storage += dataJson.get("items", None)
             except Exception as e:
                 self.logger.warning(f"Got an error with {url}: {e}")
-            finally:
-                # Count our requests not to hit 429
-                await self.__countRequest()
 
 
 # Child object for having a 1 go-to entity for all lead operations
