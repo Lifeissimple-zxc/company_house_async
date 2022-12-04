@@ -89,11 +89,15 @@ class utilMaster:
             return None
     
     @staticmethod
-    def generateRunMetaData() -> dict:
+    def generateRunMetaData(requestTypes: list) -> dict:
         """
         Function that generates run uuid and its start time
         """
-        return {"run_id": str(uuid4()), "run_start_ts": datetime.utcnow()}
+        base = {"run_id": str(uuid4()), "run_start_ts": datetime.utcnow()}
+        for rtype in requestTypes:
+            container = dict(success = [], rest = [])
+            base[rtype] = container
+        return base
 
     @staticmethod
     def splitToChunks(array: list, chunkSize: int) -> list:
@@ -105,5 +109,36 @@ class utilMaster:
         """
         return [array[i:i + chunkSize] for i in range(0, len(array), chunkSize)]
 
+    @staticmethod
+    def getRunTimeStats(metadata: dict) -> dict:
+        """
+        Uses metadata dict to compute summary stats of the run and returns as a dict
+        """
+        # Computations
+        runEnd = datetime.utcnow()
+        runtime = round((runEnd - metadata["run_start_ts"]).seconds)
+        # Search endpoint stats
+        searchRequestsSuccess = sum(metadata["search"]["success"])
+        searchRequestsRest = sum(metadata["search"]["rest"])
+        searchRequests = searchRequestsSuccess + searchRequestsRest
+        # Officer endpoint stats
+        officerRequestsSuccess = sum(metadata["officers"]["success"])
+        officerRequestsRest = sum(metadata["officers"]["rest"])
+        officerRequests = officerRequestsSuccess + officerRequestsRest
+        # Save results to dict
+        summary = dict(
+            run_start_ts = metadata["run_start_ts"],
+            run_end_ts = runEnd,
+            runtime = runtime,
+
+            total_search_requests = searchRequests,
+            success_search_requests = searchRequestsSuccess,
+            fail_search_requests = searchRequestsRest,
+
+            total_officer_requests = officerRequests,
+            success_officer_requests = officerRequestsSuccess,
+            fail_officer_requests = officerRequestsRest,
+        )
+        return summary
              
 

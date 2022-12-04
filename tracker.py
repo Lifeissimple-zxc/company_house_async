@@ -215,7 +215,6 @@ sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
 e = manager.cleanCacheTable()
 if e is not None:
     utils.logger.warning(f"Error cleaning cache table: {e}")
-# Check that data is correct on 5-10 companies!
 # Logging queues
 # leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
 # loop cleaning and closing

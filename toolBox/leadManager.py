@@ -106,6 +106,18 @@ class Connector:
             if e is not None:
                 self.logger.warning(f"Retry caching error: {e}")
     
+    def __gatherRequestStats(self, metaData: dict, requestType: str, respStatus: int) -> Union[None, KeyError]:
+        """
+        Stores data on responses in metaData dict. Mostly needed for runtime summary stats
+        """
+        try:
+            if 200<= respStatus < 300:
+                metaData[requestType]["success"].append(1)
+            else:
+                metaData[requestType]["rest"].append(1)
+        except KeyError as e:
+            self.logger.warning(f"Error when saving response to metadata dict: {e}")
+    
     async def makeRequest(
         self,
         requestType: str,
@@ -113,6 +125,7 @@ class Connector:
         auth: aiohttp.BasicAuth,
         storage: list,
         toRetry: list,
+        metaData: dict,
         params: dict = None,
         companyNumber: str = None) -> None:
         """
@@ -131,16 +144,18 @@ class Connector:
                 resp = await session.get(url = url, auth = auth, params = params)
                 dataJson = await resp.json(content_type = None)
                 rUrl = resp.url
+                # Save resp status to metadata dict
+                self.__gatherRequestStats(metaData, requestType, resp.status)
                 if (status := resp.status) != 200:
                     # If we still get 429
                     if status == 429:
                         await self.__handleOverLimit(url = rUrl)
                         #Retry on the spot
-                        retry = await session.get(
-                            url = rUrl, auth = auth
-                        )
+                        retry = await session.get(url = rUrl, auth = auth)
                         # Here I am repeating myself, maybe create a fancier get function?
                         await self.__countRequest()
+                        # Save resp status to metadata dict
+                        self.__gatherRequestStats(metaData, requestType, retry.status)
                         if (retryStatus := retry.status) == 200:
                             self.logger.info(f"Successful retry for {rUrl}")
                             dataJson  = await retry.json(content_type = None)
@@ -329,6 +344,7 @@ class LeadManager(Connector):
         retryType: str,
         taskList: list,
         auth: BasicAuth,
+        metaData: dict,
         dbClean = True,
         companyNumber: str = None,
         taskUrlLog: list = None) -> Union[None, Exception]:
@@ -362,7 +378,8 @@ class LeadManager(Connector):
                         auth = auth,
                         storage = storage,
                         toRetry = self.toRetryList,
-                        companyNumber = companyNumber
+                        companyNumber = companyNumber,
+                        metaData = metaData
                     )
                 )
             self.logger.info(f"Added {cntRetries} search entries to retry from cache")
@@ -414,3 +431,4 @@ class LeadManager(Connector):
             return None
         except Exception as e:
             return e
+    
