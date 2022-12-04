@@ -151,7 +151,7 @@ manager.cacheSearch(colsToSave, runMetaData = searchMeta)
 e = manager.cacheRetries("search")
 if e is not None:
     utils.logger.warning(f"Erros with caching retries: {e}")
-    
+
 # Check what cache results needs to be appended to the sheet
 sheetLeadIds = leadFrame["company_number"].astype(str)
 cachedAppend = manager.getCachedToAppend(
@@ -215,11 +215,9 @@ sheetReader.appendToSheet(sheetLeads = sheetLeadIds, df = mergedData)
 e = manager.cleanCacheTable()
 if e is not None:
     utils.logger.warning(f"Error cleaning cache table: {e}")
-# Message to discord? Can it be made a part of logging?
-# Error catching and handling 
+# Check that data is correct on 5-10 companies!
+# Logging queues
 # leadManager refactoring: make cache functions live in a separate object - might not be needed? Maybe better to reorganize?
 # loop cleaning and closing
-# Rate limiting is implemented, but in a hacky way: make it work better, but later
-# Error handling needs to be fixed, it is all over the place now
 
 
