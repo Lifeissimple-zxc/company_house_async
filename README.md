@@ -28,3 +28,12 @@ The code relies on the following endpoints provided by the API:
 
 + [Company Officers](https://developer-specs.company-information.service.gov.uk/companies-house-public-data-api/reference/officers/list) for extracting officers data on the recently created companies. We only go to this endpoint after we get results from the advanced search.
 
+High-level logic can be described with the following chart:<br>![High-level logic](https://www.dropbox.com/s/7wtc4lvu1km5toi/Main%20Logic.png?dl=0)<br>
+Request processing can be described with the following sequence of steps:<br>![Request processing](https://www.dropbox.com/s/soqjo275e4eagmi/Request%20processing.png?dl=0)<br>
+
+### Logging
+
+All logs are saved to a local sqlite db. In addition, **WARNING** and above log records are sent to discord.
+
+---
+
