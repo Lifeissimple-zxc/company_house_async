@@ -133,7 +133,7 @@ class discordHandler(Handler):
     
     # Using retry decorator to force sending warnings and error to Discord
     @retry(exceptions = RequestException, tries = 10, delay = 1, jitter = (1, 3))
-    def sendToDiscord(self, record: LogRecord, retries: int = 3):
+    def sendToDiscord(self, record: LogRecord):
         """
         Uses other other methods as building blocks to send a log record to Discord as string
         """
@@ -147,7 +147,7 @@ class discordHandler(Handler):
 
     def handle(self, record: LogRecord):
         """
-        Calls async sendToDiscord to produce a discord message
+        Calls sendToDiscord to produce a discord message
         """
         self.sendToDiscord(record)
 
