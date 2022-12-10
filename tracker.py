@@ -7,7 +7,6 @@ from aiohttp import BasicAuth
 from datetime import datetime as dt
 from logging import handlers
 from time import sleep
-from toolBox.asyncUtils import performTasks
 from toolBox.leadManager import LeadManager
 from toolBox.sheetManager import sheetManager
 from toolBox.utils import utilMaster
@@ -147,7 +146,7 @@ if err is not None:
     utils.logger.warning(f"Error processing search retries: {err}")
 #Make search requests
 loop = asyncio.get_event_loop()
-loop.run_until_complete(performTasks(searchTasks))
+loop.run_until_complete(manager.performTasks(searchTasks))
 #Log search success
 utils.logger.info("Search completed. Saving to cache...")
 #Cache results and 429s to later retry
@@ -212,7 +211,7 @@ if IS_WINDOWS:
 utils.logger.info("Prepared tasks for officer requests")
 
 for chunk in officerTaskChunks:
-    loop.run_until_complete(performTasks(chunk))
+    loop.run_until_complete(manager.performTasks(chunk))
 
 utils.logger.info("Officer data collected")
 officersCleaned = manager.tidyOfficerResults()

@@ -13,7 +13,8 @@ class Connector:
     """
     def __init__(self, rate: int, limit: int, sleepTimeBuffer: int, logger: Logger, allowedRequestTypes: list):
         self.rate = rate
-        self.limit = asyncio.Semaphore(limit)
+        self.limit = limit
+        self.semaphore = asyncio.Semaphore(1)
         self.baseLimit = limit
         self.logger = logger
         self.allowedRequestTypes = allowedRequestTypes
@@ -67,21 +68,24 @@ class Connector:
         """
         Facilitates ratelimitig by keeping track of how many tasks were completed and pausing if needed
         """
+        async with self.semaphore:
         # Check if we have tasks in the limit
-        if self.limit._value >= int(self.baseLimit * 0.05): # This is a bit hacky, but works
-            # Consume if yes
-            #self.limit -= 1
-            await self.limit.acquire()
-        else:
-            # Compute needed sleeptime
-            sleepTime = self.__computeSleepTime()
-            # Log sleeping step
-            self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
-            await asyncio.sleep(sleepTime)
-            # Assign new checkpoint to self
-            self.checkpoint = datetime.utcnow()
-            # Refresh our limit capacity
-            self.limit = asyncio.Semaphore(self.baseLimit)
+            #if self.limit._value >= int(self.baseLimit * 0.05): # This is a bit hacky, but works
+            if self.limit > 0: # This is a bit hacky, but works
+                # Consume if yes
+                self.limit -= 1
+                print(self.limit)
+                #await self.limit.acquire()
+            else:
+                # Compute needed sleeptime
+                sleepTime = self.__computeSleepTime()
+                # Log sleeping step
+                self.logger.warning(f"Hit RPS limit, sleeping for {sleepTime} seconds")
+                await asyncio.sleep(sleepTime)
+                # Assign new checkpoint to self
+                self.checkpoint = datetime.utcnow()
+                # Refresh our limit capacity
+                self.limit = self.baseLimit
 
     async def __handleOverLimit(self, url, requestType = None, companyNumber = None, toRetryList: list = None, first = True):
         """
@@ -93,6 +97,8 @@ class Connector:
             await asyncio.sleep(sleepTime)
             # Assign new checkpoint to self
             self.checkpoint = datetime.utcnow()
+            # Refresh our limit capacity
+            self.limit = self.baseLimit
         # If we are hitting 429 more than once, there probably is no point in sleeping more :(
         else:
             self.logger.warning(f"Saving {url} to retry cache")
@@ -181,6 +187,13 @@ class Connector:
                         storage += dataJson.get("items", None)
             except Exception as e:
                 self.logger.warning(f"Got an error with {url}: {e}")
+
+    @staticmethod
+    async def performTasks(taskList: list) -> None:
+        """
+        Function used for bulk sending async requests
+        """
+        await asyncio.gather(*taskList)
 
 
 # Child object for having a 1 go-to entity for all lead operations
