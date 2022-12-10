@@ -182,6 +182,13 @@ class Connector:
             except Exception as e:
                 self.logger.warning(f"Got an error with {url}: {e}")
 
+    @staticmethod
+    async def performTasks(taskList: list) -> None:
+        """
+        Function used for bulk sending async requests
+        """
+        await asyncio.gather(*taskList)
+
 
 # Child object for having a 1 go-to entity for all lead operations
 class LeadManager(Connector):
